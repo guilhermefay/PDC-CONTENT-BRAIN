@@ -11,5 +11,8 @@
   "license": "ISC",
   "devDependencies": {
     "task-master-ai": "^0.12.1"
+  },
+  "dependencies": {
+    "openai": "^4.96.0"
   }
 }
