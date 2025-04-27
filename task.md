@@ -1,3 +1,5 @@
+# AUTO_RUN=ON
+
 - [x] **T1 – Provisionar Supabase** [DONE @ 2025-04-27T01:34:02.192Z]
       Detalhes: criar projeto "pdc-content-brain" (região São Paulo), gerar `.env.example`, diretório `supabase/`.
       *Log: Projeto criado manualmente/CLI. Arquivos .env, .env.example, .gitignore e diretório supabase/ criados.*

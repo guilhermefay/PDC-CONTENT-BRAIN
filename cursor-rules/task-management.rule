@@ -1,1 +1,4 @@
-When coding, always read tasks from task.md, mark progress inline, and NEVER skip the approval loop described in each task. 
+When coding, always read tasks from task.md (or use `task-master next`), mark progress inline (or use `task-master set-status`), and NEVER skip the approval loop described in each task.
+
+• Use sempre MCP; para qualquer integração nova registre Resource/Tool/Prompt via MCP.
+• Se “AUTO_RUN” estiver ON (definido em `task.md`), execute `pnpm exec task-master next` em loop até backlog zerar. 
