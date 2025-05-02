@@ -1,0 +1,3 @@
+Este é um documento de teste simples.
+Contém algumas frases para verificar a indexação no R2R.
+Qualquer conteúdo serve aqui. 

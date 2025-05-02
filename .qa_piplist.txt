@@ -1,0 +1,9 @@
+docling                                  2.31.0
+docling-core                             2.28.1
+docling-ibm-models                       3.4.2
+docling-parse                            4.0.1
+fastapi                                  0.115.9
+langchain-openai                         0.2.14
+openai                                   1.76.0
+opentelemetry-instrumentation-fastapi    0.53b1
+uvicorn                                  0.34.2

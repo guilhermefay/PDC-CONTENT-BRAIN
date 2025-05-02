@@ -23,4 +23,7 @@ node_modules/
 .DS_Store
 # Task files
 tasks.json
-tasks/ 
+tasks/
+
+# Clonned R2R repository
+R2R/ 

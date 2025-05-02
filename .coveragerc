@@ -1,0 +1,28 @@
+[run]
+source = 
+    agents
+    api
+    crews
+    etl
+    infra
+    ingestion
+    vector_store
+omit = 
+    tests/*
+    */__init__.py
+    # Excluir scripts e módulos utilitários não críticos para cobertura
+    scripts/*
+    get_token.py
+    # Excluir pipelines grandes de ETL que serão cobertas separadamente em integrações
+    etl/*
+    agents/annotator_agent.py
+    # Módulos de ingestão que usam APIs externas e dependências pesadas
+    ingestion/gdrive_ingest.py
+    ingestion/local_ingest.py
+    ingestion/embeddings.py
+
+[report]
+# Fail if coverage drops below 50% (adjust as needed)
+# fail_under = 50 
+show_missing = True
+skip_covered = True 

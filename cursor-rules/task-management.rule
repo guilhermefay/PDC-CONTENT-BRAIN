@@ -1,4 +1,3 @@
-When coding, always read tasks from task.md (or use `task-master next`), mark progress inline (or use `task-master set-status`), and NEVER skip the approval loop described in each task.
-
+When coding, always manage tasks using the Task Master MCP tools (e.g., `mcp_task-master-ai_get_tasks`, `mcp_task-master-ai_next_task`, `mcp_task-master-ai_set_task_status`). Follow the workflow defined in [dev_workflow.mdc](mdc:.cursor/rules/dev_workflow.mdc) and NEVER skip the approval loop or requirements described in each task/subtask.
+ 
 • Use sempre MCP; para qualquer integração nova registre Resource/Tool/Prompt via MCP.
-• Se “AUTO_RUN” estiver ON (definido em `task.md`), execute `pnpm exec task-master next` em loop até backlog zerar. 

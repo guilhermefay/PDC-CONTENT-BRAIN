@@ -1,0 +1,178 @@
+# PRD Inicial - PDC Content Brain
+
+## Requisitos Funcionais (Baseado no TODO do README)
+
+1.  **Ingestão de Dados do Google Drive:** O sistema deve ser capaz de se conectar ao Google Drive (via API), listar arquivos em pastas especificadas e baixar o conteúdo textual desses arquivos para processamento.
+2.  **Ingestão e Transcrição de Vídeos:** O sistema deve permitir a ingestão de arquivos de vídeo ou links do YouTube. Deve usar a API da AssemblyAI para transcrever o áudio desses vídeos, gerando texto para ser processado pelo ETL.
+3.  **Testes Unitários e de Integração:** O projeto deve incluir um conjunto de testes automatizados:
+    *   Testes unitários para componentes individuais (ex: funções de chunking, wrappers de cliente).
+    *   Testes de integração para verificar a interação entre componentes (ex: fluxo ETL completo, chamada da API RAG que interage com R2R).
+4.  **Refinamento das Políticas RLS do Supabase:** As políticas de Row Level Security (RLS) no Supabase devem ser revisadas e aprimoradas para garantir que os usuários autenticados só possam acessar os dados (chunks/documentos) aos quais têm permissão.
+5.  **Melhoria no Tratamento de Erros e Resiliência:** O sistema deve ter um tratamento de erros mais robusto em todos os componentes (ETL, API, wrappers). Isso inclui logging detalhado de erros, tentativas de retry para operações de rede falhas e mecanismos para evitar a interrupção completa do processo em caso de falhas pontuais.
+6.  **Configuração de CI/CD:** Um pipeline de Integração Contínua e Entrega Contínua (CI/CD) deve ser configurado (ex: usando GitHub Actions) para automatizar:
+    *   Execução de testes a cada push/merge.
+    *   Build da aplicação (se aplicável).\n    *   Deploy (ex: da API RAG) para um ambiente de homologação/produção.
+7.  **Monitoramento e Logging Robustos:** Implementar um sistema de monitoramento e logging mais completo:
+    *   Coleta centralizada de logs (ex: usando um serviço como Datadog, Sentry ou o próprio logging do Supabase).
+    *   Métricas de performance da API (tempo de resposta, taxa de erro).
+    *   Monitoramento do status dos serviços externos (R2R Cloud, Supabase).
+
+# Product Requirements Document (PRD) - PDC Content Brain (R2R & Advanced Crews Architecture)
+
+## 1. Overview
+
+This document outlines the requirements for the PDC Content Brain, an internal system designed to ingest, process, annotate, strategize, generate, and provide contextual retrieval for content related to the "Projeto Digital Completo" (PDC). The system leverages:
+- Google Drive and video transcription for **ingestion**.
+- AI agents (CrewAI) for initial **annotation** (`AnnotatorAgent`).
+- Specialized CrewAI **Crews** for advanced **content strategy** (`ContentStrategyCrew`) and **launch execution** (`LaunchCommanderCrew`).
+- **Supabase** for raw/annotated document storage and user management.
+- **R2R Cloud** for embedding generation, vector storage, and Retrieval-Augmented Generation (RAG) capabilities.
+
+The goal is to create a centralized, intelligent content automation and knowledge base system accessible via an API, respecting user roles (team vs. student).
+
+## 2. System Architecture & Data Flow
+
+1.  **Ingestion:** Raw content (documents from GDrive, video transcripts) is collected by dedicated Python scripts.
+2.  **Chunking:** Ingested text is broken down into smaller, semantically relevant chunks.
+3.  **Annotation:** Each chunk is processed by the `AnnotatorAgent` (CrewAI) to determine relevance (`keep`), assign `tags`, and provide a `reason`.
+4.  **Raw Storage (Supabase):** Both original documents/transcripts and the annotated chunks (including those marked `keep=False`) are stored in Supabase tables for record-keeping and potential future analysis.
+5.  **Embedding & Vector Storage (R2R Cloud):** Chunks marked `keep=True` by the AnnotatorAgent are sent to the **R2R Cloud API** for embedding generation and indexing in the managed vector store.
+6.  **RAG Retrieval (R2R Cloud):** The RAG API queries the **R2R Cloud API** to find relevant chunks based on semantic similarity to the user's query for standard RAG operations. R2R handles the vector search and initial generation.
+7.  **Advanced Content Workflows (Crews):** Dedicated Crews (`ContentStrategyCrew`, `LaunchCommanderCrew`, etc.) are triggered via API or scripts. They may interact with Supabase data, external tools (calendars, analytics), and LLMs to perform complex planning and generation tasks, outputting plans or content assets.
+8.  **API Layer (FastAPI):** Exposes endpoints for:
+    *   Standard RAG querying (via R2R).
+    *   Triggering advanced Crew workflows.
+    *   Potentially system management.
+    *   Handles authentication and authorization.
+
+## 3. Core Modules & Requirements
+
+### 3.1. Google Drive Ingest (`ingestion/gdrive_ingest.py`)
+    - **Status:** Implemented.
+    - **Functionality:** Authenticates with Google Drive (Service Account), lists/downloads/exports files from specified folders (`/PDC Content/{aulas, emails, copys, posts}`), extracts text using **Docling**.
+    - **Output:** Structured data {content, metadata (origin, source_name)}.
+    - **Needs:** Configuration of actual `DRIVE_FOLDER_IDS`.
+
+### 3.2. Video Transcription (`ingestion/video_transcription.py`)
+    - **Status:** Implemented.
+    - **Functionality:** Transcribes videos from a source path using **AssemblyAI** (primary) and **WhisperX** (fallback).
+    - **Output:** Structured data {text, metadata (origin='video', source_name)}.
+    - **Needs:** Configuration (`ASSEMBLYAI_API_KEY`), potentially parametrize `VIDEO_SOURCE_PATH`.
+
+### 3.3. Content Chunking (`etl/annotate_and_index.py` - `chunk_content` function)
+    - **Status:** Implemented (within ETL script).
+    - **Functionality:** Splits text into chunks (target ~800 tokens) using `tiktoken`, attempting to preserve paragraph/sentence structure. Preserves metadata.
+    - **Needs:** Consider moving to a dedicated module (`processing/chunking.py`)?
+
+### 3.4. Annotation Agent (`agents/annotator_agent.py`)
+    - **Status:** Implemented.
+    - **Functionality:** CrewAI agent (`AnnotatorAgent`) using `gpt-4o` (default) to process content chunks. Outputs `{temp_id, keep, tags, reason}` based on PDC context.
+    - **Needs:** Fine-tuning prompts/logic if needed, ensure context (`prd_annotator.txt`) is effectively utilized. Ensure compatibility with new modular agent architecture.
+
+### 3.5. Supabase Storage
+    - **Status:** Basic setup exists (`supabase_config/migrations/0000_initial_schema.sql`).
+    - **Functionality:** Store raw ingested documents and annotated chunks (both `keep=True` and `keep=False`) for archival, reference, and potential input to advanced Crews. Table `documents` (or similar) should hold `id`, `content`, `metadata`, `annotation_tags`, `annotation_keep`, `annotation_reason`.
+    - **Needs:** **Refine schema** in `0000_initial_schema.sql` to match this purpose (remove post/metric tables if not needed, simplify `documents` table). Ensure RLS is correctly configured. **Remove embedding column and vector index.**
+
+### 3.6. R2R Client & Integration (`infra/r2r_client.py`)
+    - **Status:** Implemented (Task 1 Done).
+    - **Functionality:** Python client wrapper (`R2RClientWrapper`) interacts with the R2R Cloud API (using the `r2r` SDK). Handles authentication, health checks, document upload, standard RAG, and agentic RAG queries. Includes retry logic and logging.
+    - **Needs:** Continuous monitoring of R2R SDK updates and API changes.
+
+### 3.7. ETL Pipeline (`etl/annotate_and_index.py`)
+    - **Status:** Partially Implemented.
+    - **Functionality:** Reads local files (placeholder), chunks, annotates, generates embeddings (placeholder), stores in Supabase.
+    - **Needs:**
+        - **Integrate** directly with `gdrive_ingest` and `video_transcription` outputs instead of reading local files.
+        - **Remove embedding generation logic.**
+        - **Store** all annotated chunks (True/False) in Supabase.
+        - **Send** chunks marked `keep=True` to **R2R Cloud API** for embedding/indexing using the `R2RClientWrapper`.
+        - Implement robust error handling and logging for both Supabase and R2R interactions.
+
+### 3.8. RAG API (`api/rag_api.py`)
+    - **Status:** Partially Implemented (targets pgvector).
+    - **Functionality:** FastAPI endpoint `/query`, JWT authentication.
+    - **Needs:**
+        - **Adapt** the `/query` endpoint to use `R2RClientWrapper` for standard RAG and agentic RAG calls.
+        - **Remove** embedding generation for the query.
+        - **Remove** call to Supabase RPC (`match_documents_rls`).
+        - Handle standard RAG results from R2R.
+        - Add optional parameter/logic (`deep_research: bool = False`?) to trigger R2R's Agentic mode.
+        - Implement **fallback logic** (e.g., return an informative message or empty results) if R2R API is unavailable.
+        - Ensure user context (ID/role) is passed to R2R if needed for filtering.
+        - **Add new endpoints** to trigger advanced Crew workflows (e.g., `/crews/content_strategy/plan`, `/crews/launch_commander/execute`). Define request/response schemas for these.
+
+### 3.9. Testing (`tests/`)
+    - **Status:** Basic structure exists.
+    - **Needs:**
+        - **Update** `test_rag_api.py` to mock `R2RClientWrapper` calls instead of Supabase RPC.
+        - Add tests for `R2RClientWrapper` methods (if not already covered by Task 1 strategy).
+        - Add integration tests for the full ETL pipeline (mocking GDrive, AssemblyAI, Supabase, R2R).
+        - Add tests for ingestion modules.
+        - **Add tests for new Agents and Crews.**
+        - **Add tests for new API endpoints activating Crews.**
+        - Achieve target test coverage.
+
+### 3.10. DevOps & Documentation
+    - **Status:** Minimal (`.gitignore`, `requirements.txt`, `README.md`, `.env.sample`).
+    - **Needs:**
+        - **Update** `README.md` to include the new Crew architecture and activation methods.
+        - Create a `Makefile` for common tasks (`run-etl`, `start-api`, `run-tests`, `run-content-plan`, `run-launch`).
+        - Ensure `.env.sample` includes all required variables.
+        - **Add documentation** for the modular Crew/Agent architecture (how to add new ones).
+
+### 3.11. Modular Crew/Agent Architecture
+    - **Status:** Not Implemented (Task 12).
+    - **Functionality:** Define a base structure (directories, possibly base classes/interfaces) for defining Crews and Agents to ensure consistency and easy expansion.
+    - **Needs:** Implement the structure described in Task 12. Ensure existing `AnnotatorAgent` conforms.
+
+### 3.12. Content Strategy Crew (`crews/content_strategy_crew.py`)
+    - **Status:** Not Implemented (Task 18).
+    - **Functionality:** Acts as the internal editorial strategist. Plans content aligned with brand positioning, PDC sales funnel, persona (`Natália`), and the PDC annual calendar. Outputs a strategic plan.
+    - **Agents:** (Tasks 13-17)
+        - `CampaignPlanner`: Defines themes/objectives per campaign.
+        - `PersonaStrategist`: Connects content to persona stages/pains.
+        - `GapSeeker`: Identifies strategic content gaps.
+        - `CalendarArchitect`: Builds editorial plan (formats, channels, priority).
+        - `InsightSyncer` (Optional): Connects to internal data for plan adjustment.
+    - **Activation:** Via script `scripts/plan_content.py` (Task 19).
+    - **Needs:** Implement all agents and the crew definition following the modular architecture. Define the output plan structure.
+
+### 3.13. Launch Commander Crew (`crews/launch_commander_crew.py`)
+    - **Status:** Not Implemented (Task 26).
+    - **Functionality:** Executes complete PDC launch campaigns. Defines phases, generates campaign plan, creates communication assets.
+    - **Agents:** (Tasks 20-25)
+        - `LaunchPlanner`: Structures launch timeline/objectives.
+        - `EmailSequenceWriter`: Writes email sequences per phase.
+        - `CreativeStormer`: Proposes creative concepts for channels.
+        - `OfferEngineer`: Persuasively reinforces value proposition/bonuses.
+        - `DeadlineManager`: Creates scarcity/urgency content.
+        - `LeadNurturer`: Produces micro-content (objections, social proof, authority).
+    - **Activation:** Via script `scripts/launch_campaign.py` (Task 27).
+    - **Needs:** Implement all agents and the crew definition following the modular architecture. Define output structure for plan/assets.
+
+## 4. Non-Functional Requirements
+
+- **Security:** Manage API keys (OpenAI, AssemblyAI, Supabase, R2R) securely via `.env`. Ensure proper authentication/authorization on the API layer (including Crew endpoints).
+- **Cost:** Monitor API usage for OpenAI, AssemblyAI, and **R2R Cloud**, especially considering potentially long-running Crew executions.
+- **Scalability:** ETL pipeline should handle increasing content volume. R2R Cloud manages vector DB scaling. API layer and Crew execution should be scalable (consider asynchronous execution for long tasks).
+- **Maintainability:** Modular code, clear documentation, comprehensive tests. Easy addition of new Crews/Agents.
+- **Reliability:** Implement retries/fallbacks for external API calls. Ensure Crew workflows are fault-tolerant or resumable if possible.
+
+## 5. Milestones / Roadmap (High-Level)
+
+1.  **Setup & Config:** Finalize `.env.sample`, update `README.md`, create `Makefile`.
+2.  **R2R Client:** Implement R2R client module and tests. *(Done - Task 1)*
+3.  **Supabase Schema:** Refine Supabase migration for raw/annotated storage. *(Task 2)*
+4.  **Modular Arch:** Implement base architecture for Crews/Agents. *(Task 12)*
+5.  **Content Strategy Crew:** Implement agents, crew, and activation script. *(Tasks 13-19)*
+6.  **Launch Commander Crew:** Implement agents, crew, and activation script. *(Tasks 20-27)*
+7.  **ETL Update:** Integrate ingestion, Supabase storage, R2R upload. Add tests. *(Task 3)*
+8.  **API Update:** Adapt `/query` endpoint to use R2R Client, add Crew endpoints. Add tests. *(Task 4)*
+9.  **Testing:** Complete unit and integration test coverage for all components. *(Task 7)*
+10. **DevOps & Docs:** Finalize documentation, configure CI/CD. *(Tasks 9, 10)*
+11. **Ingestion Config:** Configure GDrive/Video sources. *(Tasks 5, 6)*
+12. **Error Handling/Resilience:** Implement robust error handling across system. *(Task 8)*
+
+# (Simulado) Marcando Subtarefa 7.4 como in-progress: task-master set-status --id=7.4 --status=in-progress
+# Registro: Subtarefa 7.4 marcada como in-progress.

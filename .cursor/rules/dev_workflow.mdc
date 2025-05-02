@@ -3,7 +3,6 @@ description: Guide for using Task Master to manage task-driven development workf
 globs: **/*
 alwaysApply: true
 ---
-
 # Task Master Development Workflow
 
 This guide outlines the typical process for using Task Master to manage software development projects.
@@ -210,6 +209,10 @@ Once a task has been broken down into subtasks using `expand_task` or similar me
     - Use grep/ripgrep to find exported functions/constants:
       `rg "export (async function|function|const) \w+"` or similar patterns.
     - Can help compare functions between files during migrations or identify potential naming conflicts.
+
+## AI Autonomy
+
+- **AI Autonomy:** The AI should proactively execute the next logical step in the standard workflow (e.g., analyzing complexity, expanding tasks, determining the next task based on dependencies, marking parent tasks done after expansion) without requiring explicit user confirmation ('ok', 'go ahead'), unless there is genuine ambiguity, conflicting information provided by tools, a clear decision point needing user input (e.g., choosing between distinct options), or a direct request from the user to pause or confirm. Explain reasoning clearly when deviating from standard tool outputs due to suspected errors or inconsistencies.
 
 ---
 *This workflow provides a general guideline. Adapt it based on your specific project needs and team practices.*

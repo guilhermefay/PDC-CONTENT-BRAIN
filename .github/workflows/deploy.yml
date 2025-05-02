@@ -1,0 +1,123 @@
+name: Deploy API
+
+on:
+  # Gatilho para Staging: Push na branch 'develop'
+  push:
+    branches:
+      - develop
+
+  # Gatilho para Produção: Manualmente via interface do GitHub Actions
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+
+jobs:
+  # Job de Staging
+  deploy_staging:
+    name: Deploy to Staging
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging # Define o ambiente (requer configuração no repo GitHub)
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make install-dev # Ou o comando apropriado
+      
+      - name: Build application
+        run: |
+          pip install build
+          python -m build
+
+      - name: Download artifact (if needed, or use build output directly)
+        # uses: actions/download-artifact@v4 
+        # with:
+        #   name: application-artifact-${{ github.sha }}
+        #   path: ./deploy_package
+        run: |
+          echo "Placeholder: Download or locate build artifact"
+
+      - name: Deploy to Staging Environment
+        run: |
+          echo "Placeholder: Add commands to deploy to staging server/platform"
+          # Ex: ssh user@staging-server 'deploy_script.sh'
+          # Ex: vercel deploy --prebuilt --token $VERCEL_TOKEN
+          # Ex: aws s3 sync ... / aws codedeploy create-deployment ...
+          
+      - name: Post-Deployment Health Check (Staging)
+        run: |
+          echo "Placeholder: Add commands to check if staging deployment is healthy"
+          # Ex: curl --fail https://staging.api.example.com/health
+
+      # Notificação de Falha (Exemplo)
+      - name: Notify failure
+        if: failure()
+        run: |
+          echo "Deployment to staging failed! Check logs."
+        # Ou usar uma action como peter-evans/commit-comment ou slackapi/slack-github-action
+
+# Job de Produção
+deploy_production:
+  name: Deploy to Production
+  # needs: [deploy_staging] # Opcional, dependendo do fluxo
+  if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production'
+  runs-on: ubuntu-latest
+  environment: production # Define o ambiente (requer configuração no repo GitHub)
+
+  steps:
+    - uses: actions/checkout@v4 # Poderia fazer checkout da tag/release específica se o trigger fosse on: release
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        make install-dev
+      
+    - name: Build application
+      run: |
+        pip install build
+        python -m build
+
+    - name: Download artifact (if needed)
+      # run: echo "Placeholder: Download or locate build artifact for production"
+      run: |
+        echo "Placeholder: Download or locate build artifact for production"
+
+    - name: Deploy to Production Environment
+      run: |
+        echo "Placeholder: Add commands to deploy to PRODUCTION server/platform"
+        # CUIDADO: Comandos de produção aqui!
+
+    - name: Post-Deployment Health Check (Production)
+      run: |
+        echo "Placeholder: Add commands to check if PRODUCTION deployment is healthy"
+
+    - name: Deployment Rollback (Placeholder)
+      if: failure()
+      run: |
+        echo "Placeholder: Add commands to rollback production deployment if health check fails"
+
+    - name: Notify failure (Production)
+      if: failure()
+      run: |
+        echo "PRODUCTION deployment failed! Check logs and potentially rollback." 

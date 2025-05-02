@@ -1,0 +1,21 @@
+{
+  "texts": [
+    "Programação é uma habilidade essencial no mundo moderno. Para estudar programação, comece com lógica de programação, depois escolha uma linguagem como Python para praticar.",
+    "Marketing digital envolve várias estratégias como SEO, mídia social e email marketing. É importante definir seu público-alvo e criar conteúdo relevante.",
+    "Documento restrito apenas para professores sobre avaliação de alunos e metodologias de ensino."
+  ],
+  "metadata": [
+    {
+      "role": "aluno",
+      "type": "article"
+    },
+    {
+      "role": "aluno",
+      "type": "article"
+    },
+    {
+      "role": "professor",
+      "type": "restricted"
+    }
+  ]
+}

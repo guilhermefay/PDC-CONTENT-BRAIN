@@ -1,0 +1,109 @@
+############################################################
+📚 CONTEXTO OFICIAL — PDC (Pediatra de Consultório)
+############################################################
+1. Identidade
+   • **Nome**: Pediatra de Consultório (PDC)  
+   • **Missão**: Ensinar médicos pediatras a transformar plantões em carreira de consultório lucrativo, com gestão, marketing e experiência premium para famílias.  
+   • **Brand Voice**: autoritário + empático; metáforas médicas; CTA claro; ganchos fortes ("Você cuida dos filhos dos outros… e os seus?").
+
+2. Tipos de Conteúdo
+   • E-mails de nurturing (produtos, lançamentos)  
+   • Carrosséis Instagram (educacionais → MOFU • CTA final)  
+   • Posts estáticos (quotes, estatísticas)  
+   • Páginas de vendas / capturas  
+   • Transcrições de aulas técnicas (gestão, funil, atendimento humanizado)
+
+3. Matriz de Níveis de Consciência (usar como `tags.awareness`)
+   | Código | Descrição                                                    |
+   |--------|--------------------------------------------------------------|
+   | TOFU   | Totalmente inconsciente (acha que plantão é "ok")           |
+   | PROBLEMA | Reconhece dor do plantão, mas não vê solução              |
+   | SOLUÇÃO | Sabe que consultório resolve, mas não sabe como começar    |
+   | PRODUTO | Conhece o Método PDC, compara ofertas                       |
+   | BOFU   | Já quer o PDC, precisa da oferta final / bônus               |
+
+4. Emoções-chave (usar em `tags.tone`)
+   autoridade • urgência • inspiração • empatia • prova social
+
+5. Temas-chave (usar em `tags.tema`)
+   gestão_consultório • marketing_pediátrico • funil_whatsapp • vacinas • precificação
+
+6. Exemplo de JSON desejado
+```json
+{
+  "keep": true,
+  "tags": {
+    "awareness": "SOLUÇÃO",
+    "tone": ["empatia", "inspiração"],
+    "tema": ["gestão_consultório"]
+  },
+  "reason": "Explica passo inicial de gestão que falta à maioria dos pediatras."
+}
+```
+
+7. Critérios de "DROP"
+   • Trechos de lives com "obrigado por assistirem"  
+   • Duplicatas > 90 % similares  
+   • Textos sem contexto (emojis soltos, "teste microfone")  
+   • Conteúdo que contraria diretrizes médicas ou éticas
+
+8. Limite de tags
+   • máximo 1 para `awareness`  
+   • até 2 para `tone`  
+   • até 2 para `tema`
+
+############################################################
+
+
+############################################################
+PRD: Implementar AnnotatorAgent como Agente CrewAI
+############################################################
+🔖 **Código do Projeto**: `pdc-content-brain`
+
+## 1. Visão Geral
+Queremos transformar o Annotator—responsável por filtrar, classificar e taggear chunks de conteúdo—em um **agente CrewAI formal**.  
+Ele rodará logo após o split/limpeza básica e antes do Curator, garantindo que apenas trechos úteis e rotulados cheguem ao pgvector.
+
+## 2. Objetivos
+1. Criar um agente CrewAI chamado `AnnotatorAgent`.
+2. Integrá-lo ao pipeline ETL (`etl/annotate_and_index.py`).
+3. Gravar saídas aprovadas em Supabase com estrutura `{ keep, tags, reason }`.
+4. Incluir testes automáticos para processar lote de 10 chunks fictícios.
+
+## 3. Requisitos Funcionais
+| # | Descrição |
+|---|-----------|
+| 3.1 | Criar **`agents/annotator_agent.py`** estendendo `crew_ai.Agent`. |
+| 3.2 | Prompt do agente:<br>"Você é redator sênior do PDC… devolva JSON `{'keep': bool, 'tags': [...], 'reason': ''}`." |
+| 3.3 | Modelo LLM: `gpt-4o`, `temperature=0.1`. |
+| 3.4 | Sem memory inicial; `allow_delegation=False`. |
+| 3.5 | Novo script **`etl/annotate_and_index.py`**:<br>  • Ler arquivos em `data/raw/`<br>  • Chamar `AnnotatorAgent.run(chunk)`<br>  • Se `keep==true`, inserir em Supabase `documents` com coluna `tags` (JSONB). |
+| 3.6 | Adaptar **`schema.sql`**:<br>  `ALTER TABLE documents ADD COLUMN tags JSONB DEFAULT '{}'::jsonb;` |
+| 3.7 | Atualizar README técnico com instruções `python etl/annotate_and_index.py`. |
+
+## 4. Dependências
+- T1 (Supabase provisionado) ✅  
+- T2 (pgvector & schema base) ✅  
+- OpenAI API key no `.env`  
+- Package `crewai>=0.6.0` instalado
+
+## 5. Critérios de Aceitação
+1. Rodar `python etl/annotate_and_index.py` com 10 chunks exemplo → inserir ≥1 registro em `documents` com `tags` não vazias.  
+2. `pytest tests/test_annotator.py` passa todos os asserts (`keep` bool válido, tags ≤ 5, razão ≤ 30 palavras).  
+3. Coverage de teste ≥ 80 % no módulo `agents/annotator_agent.py`.  
+4. Commit final: **`feat: T3 done – AnnotatorAgent CrewAI`**
+
+## 6. Estratégia de Teste
+- Arquivo `tests/test_annotator.py` injeta 3 chunks de casos borda (duplicata, emoji, texto útil).  
+- Verifica retorno JSON válido e descarte correto dos ruins.  
+- Usa `pytest` + `pytest-env` para carregar as keys do `.env`.
+
+## 7. Roadmap de Tarefas Sugerido
+1. **Criar classe AnnotatorAgent** (`agents/annotator_agent.py`).  
+2. **Modificar schema** para coluna `tags JSONB`.  
+3. **Escrever script etl/annotate_and_index.py** chamando o agente.  
+4. **Adicionar testes unitários**.  
+5. **Atualizar README**.  
+6. **Executar lote piloto** e validar métricas.
+
+############################################################ 

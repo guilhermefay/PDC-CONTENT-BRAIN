@@ -1,0 +1,27 @@
+{
+  "meta": {
+    "generatedAt": "2025-05-02T00:38:15.104Z",
+    "tasksAnalyzed": 2,
+    "thresholdScore": 5,
+    "projectName": "Your Project Name",
+    "usedResearch": false
+  },
+  "complexityAnalysis": [
+    {
+      "taskId": 10,
+      "taskTitle": "Configure CI/CD Pipeline",
+      "complexityScore": 7,
+      "recommendedSubtasks": 6,
+      "expansionPrompt": "Break down the CI/CD pipeline configuration task into detailed subtasks covering workflow setup, test automation, code quality checks, build process, deployment configuration, security scanning, and notification system. For each subtask, specify the exact files to modify, GitHub Actions syntax to use, and integration points with the existing system.",
+      "reasoning": "This task involves multiple technical components of a CI/CD pipeline that need to be integrated together. It requires knowledge of GitHub Actions, testing frameworks, deployment strategies, and security practices. The task already outlines 6 main components, each of which has its own complexity. The interdependencies between these components and the need for proper secret management add to the overall complexity."
+    },
+    {
+      "taskId": 28,
+      "taskTitle": "Implement Role-Based Row Level Security for Documents Table",
+      "complexityScore": 8,
+      "recommendedSubtasks": 5,
+      "expansionPrompt": "Break down the implementation of role-based row level security into detailed subtasks covering: 1) Folder mapping configuration and documentation, 2) Document ingestion pipeline modifications for access level tagging, 3) Schema updates and database changes, 4) RAG API filtering implementation with parameter handling, and 5) Edge case handling and testing. For each subtask, specify the exact files to modify, data structures to update, and testing scenarios.",
+      "reasoning": "This task requires modifications across multiple components of the system (ingestion pipeline, database schema, and API layer). It involves understanding the existing document flow, implementing new metadata fields, and ensuring consistent access control throughout the system. The need to handle edge cases like document movement between folders and planning for future access levels adds complexity. The task also has security implications since it deals with access control, requiring careful implementation and thorough testing."
+    }
+  ]
+}
