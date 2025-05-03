@@ -82,4 +82,4 @@ jobs:
     #   uses: actions/upload-artifact@v4
     #   with:
     #     name: application-artifact-${{ github.sha }}
-    #     path: dist/ 
+    #     path: dist/ # Diretório padrão de output do 'python -m build' 
