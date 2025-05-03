@@ -1,7 +1,9 @@
 pytest-mock
-crewai
-crewai[tools]
-langchain-openai
+crewai==0.62.0
+crewai[tools]==0.62.0
+langchain==0.3.0
+langchain-community==0.3.0
+langchain-openai==0.2.0
 supabase
 assemblyai
 whisperx
