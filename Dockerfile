@@ -3,7 +3,7 @@
 FROM python:3.11-slim
 
 # Argumento para quebrar o cache. Mude o valor se precisar forçar rebuild.
-ARG CACHE_BUSTER=1
+ARG CACHE_BUSTER=2
 
 # Set the working directory in the container
 WORKDIR /app
