@@ -5,6 +5,9 @@ FROM python:3.11-slim
 # Set the working directory in the container
 WORKDIR /app
 
+# Comando simples para quebrar o cache do Railway
+RUN echo "Forçando quebra de cache - $(date)"
+
 # Argumento para receber o conteúdo do JSON de credenciais do Google
 ARG GOOGLE_CREDS_JSON_CONTENT
 
