@@ -14,7 +14,7 @@ python-multipart
 PyJWT==2.8.0
 docling
 pytest>=8.3.3
-r2r>=3.5.0
+r2r==3.5.18
 requests
 
 # Google API Client Libraries (for GDrive)
