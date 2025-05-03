@@ -12,6 +12,14 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+        OPENAI_API_KEY: dummy
+        ASSEMBLYAI_API_KEY: dummy
+        R2R_BASE_URL: http://dummy-r2r.local
+        R2R_API_KEY: dummy
+        SUPABASE_URL: https://dummy.supabase.co
+        SUPABASE_SERVICE_KEY: dummy
+        SUPABASE_JWT_SECRET: dummysecret123456789012345678901234
 
     steps:
     - uses: actions/checkout@v4
@@ -37,42 +45,13 @@ jobs:
 
     # Teste primeiro
     - name: Test with pytest
-      env:
-        OPENAI_API_KEY: dummy
-        ASSEMBLYAI_API_KEY: dummy
-        R2R_BASE_URL: http://dummy
-        R2R_API_KEY: dummy
-        SUPABASE_URL: http://test.supabase.co
-        SUPABASE_SERVICE_ROLE_KEY: dummy
-        SUPABASE_JWT_SECRET: dummysecret123456789012345678901234
       run: |
         make test
-
-    # Verificação de cobertura após os testes
-
-    # <<< TEMPORARIAMENTE DESABILITADO: Check test coverage >>>
-    # - name: Check test coverage
-    #   run: |
-    #     # Necessário instalar pytest-cov se não estiver em install-dev
-    #     # pip install pytest-cov 
-    #     pytest --cov=. --cov-report=xml --cov-fail-under=80 # Gera relatorio XML e falha se < 80%
-
-    # TODO: Opcionalmente adicionar upload para Codecov.io aqui
-    # - name: Upload coverage reports to Codecov
-    #   uses: codecov/codecov-action@v4.0.1
-    #   with:
-    #     token: ${{ secrets.CODECOV_TOKEN }} # Necessário configurar segredo no repo
-    #     slug: your_org/your_repo # Opcional: Usar se o repo não for detectado automaticamente
 
     # Lint depois
     - name: Lint with flake8
       run: |
         make lint
-
-    # TODO: Adicionar verificação de formatação se não estiver em make lint
-    # - name: Check formatting with Black
-    #   run: |
-    #     make format-check
 
     # Auditoria de segurança
     - name: Security Audit Dependencies
