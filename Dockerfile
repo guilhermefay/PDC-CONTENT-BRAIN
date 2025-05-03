@@ -31,4 +31,4 @@ EXPOSE 8000
 
 # Run uvicorn server when the container launches
 # Use 0.0.0.0 to allow connections from outside the container
-CMD ["uvicorn", "api.rag_api:app", "--host", "0.0.0.0", "--port", "8000"] 
+CMD ["python", "etl/annotate_and_index.py", "--source", "gdrive"] 
