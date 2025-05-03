@@ -82,7 +82,7 @@ GDRIVE_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessi
 # if not DRIVE_FOLDER_IDS:
 #     logger.error("Nenhum ID de pasta do Google Drive configurado. Encerrando ingestão do GDrive.")
 
-OUTPUT_DIR = '/tmp/ingest_output'
+OUTPUT_DIR = '/storage/ingest_output'
 
 try:
     docling_converter = DocumentConverter()
