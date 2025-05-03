@@ -436,9 +436,9 @@ async def health_check():
         }
     }
     
-    if not supabase_client or not r2r_client:
+    if not r2r_client:
         health["status"] = "degraded"
-        
+
     return health
 
 # --- TEMPORARY DEBUG ENDPOINT REMOVED --- 
