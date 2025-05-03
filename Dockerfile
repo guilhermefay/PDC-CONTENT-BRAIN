@@ -31,4 +31,5 @@ EXPOSE 8000
 # ENV PORT=8000
 
 # Rodar o ETL automaticamente ao iniciar o container
-CMD ["python", "etl/annotate_and_index.py", "--source", "gdrive"] 
+CMD []
+ENTRYPOINT ["python", "etl/annotate_and_index.py", "--source", "gdrive"] 
