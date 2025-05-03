@@ -14,5 +14,5 @@ python-multipart==0.0.5
 PyJWT==2.8.0
 docling
 pytest>=8.3.3
-r2r==0.1.30
+r2r==0.1.31
 requests
