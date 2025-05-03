@@ -410,20 +410,13 @@ async def health_check():
     Retorna:
         HealthCheckResponse: Objeto Pydantic com o status geral e das dependências.
     """
-    # <<< DEBUG: Log client status >>>
-    logging.info(f"[Health Check] Checking client status...")
-    logging.info(f"[Health Check] Initial supabase_client is type: {type(supabase_client)}, truthy: {bool(supabase_client)}")
-    logging.info(f"[Health Check] Initial r2r_client is type: {type(r2r_client)}, truthy: {bool(r2r_client)}")
-    # <<< END DEBUG >>>
+    global supabase_client # <<< FIX: Moved global declaration to the top >>>
 
     # <<< FIX: Attempt re-initialization if None >>>
-    global supabase_client # Declare intention to modify global variable
     if not supabase_client:
         logging.warning("[Health Check] supabase_client is None, attempting re-initialization...")
         supa_url = os.environ.get("SUPABASE_URL")
         supa_key = os.environ.get("SUPABASE_SERVICE_KEY")
-        logging.info(f"[Health Check] Re-read SUPABASE_URL: {supa_url}")
-        logging.info(f"[Health Check] Re-read SUPABASE_SERVICE_KEY: {supa_key}")
         if supa_url and supa_key:
             try:
                 supabase_client = create_client(supa_url, supa_key)
