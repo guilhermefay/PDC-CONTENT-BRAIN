@@ -15,7 +15,7 @@ RUN pip install --upgrade pip
 RUN echo "Cache bust: $CACHE_BUSTER"
 
 # Instalar ffmpeg robustamente...
-RUN apt-get update --no-cache && apt-get install -y --no-install-recommends ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Argumento para receber o conteúdo do JSON de credenciais do Google
 # Certifique-se que a variável GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT está disponível durante o build
