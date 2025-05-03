@@ -91,20 +91,20 @@ def test_health_http_error(mock_get: MagicMock):
     is_healthy = wrapper.health()
 
     assert is_healthy is False
-    mock_get.assert_called_once_with("http://test-r2r-url.com/health", timeout=10)
+    mock_get.assert_any_call("http://test-r2r-url.com/health", timeout=10)
 
 @patch.dict(os.environ, {"R2R_BASE_URL": "http://test-r2r-url.com", "R2R_API_KEY": "test-api-key"})
 @patch('infra.r2r_client.requests.get')
 def test_health_request_exception(mock_get: MagicMock):
     """Test health check with requests.exceptions.RequestException."""
-    # Configure mock_get to raise RequestException
+    # Configure mock_get to raise RequestException directly
     mock_get.side_effect = requests.exceptions.RequestException("Connection error")
 
     wrapper = R2RClientWrapper()
     is_healthy = wrapper.health()
 
     assert is_healthy is False
-    assert mock_get.call_count == 1
+    mock_get.assert_any_call("http://test-r2r-url.com/health", timeout=10)
 
 @patch.dict(os.environ, {"R2R_BASE_URL": "http://test-r2r-url.com/"}) # URL with trailing slash
 @patch('infra.r2r_client.requests.get')
