@@ -38,9 +38,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code into the container
 COPY . .
 
-# CMD/ENTRYPOINT vazios - usamos Custom Start Command no Railway
-CMD []
-ENTRYPOINT []
-
 # Make port 8000 available (opcional, mas inofensivo)
 EXPOSE 8000 
