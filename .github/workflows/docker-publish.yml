@@ -26,3 +26,5 @@ jobs:
           file: ./Dockerfile
           push: true
           tags: ghcr.io/guilhermefay/pdc-content-brain:latest
+          build-args: |
+            GOOGLE_CREDS_JSON_CONTENT=""
