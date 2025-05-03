@@ -1,22 +1,19 @@
 # Força rebuild para novo CMD do ETL
-# Use an official Python runtime as a parent image
+# Use an official Python runtime as a parent image (v2 to break cache)
 FROM python:3.11-slim
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Comando simples para quebrar o cache do Railway v3
-RUN echo "Forçando quebra de cache v3 - $(date)"
+# Upgrade pip PRIMEIRO para tentar quebrar cache
+RUN pip install --upgrade pip
+
+# Instalar ffmpeg robustamente...
+RUN apt-get update --no-cache && apt-get install -y --no-install-recommends ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Argumento para receber o conteúdo do JSON de credenciais do Google
 # Certifique-se que a variável GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT está disponível durante o build
 ARG GOOGLE_CREDS_JSON_CONTENT
-
-# Instalar ffmpeg robustamente e limpar cache apt
-RUN apt-get update --no-cache && apt-get install -y --no-install-recommends ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# Upgrade pip to the latest version
-RUN pip install --upgrade pip
 
 # Copy the requirements file into the container
 COPY requirements.txt .
