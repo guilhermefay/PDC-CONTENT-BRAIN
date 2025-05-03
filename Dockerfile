@@ -1,12 +1,18 @@
 # Força rebuild para novo CMD do ETL
-# Use an official Python runtime as a parent image (v2 to break cache)
+# Use an official Python runtime as a parent image
 FROM python:3.11-slim
+
+# Argumento para quebrar o cache. Mude o valor se precisar forçar rebuild.
+ARG CACHE_BUSTER=1
 
 # Set the working directory in the container
 WORKDIR /app
 
-# Upgrade pip PRIMEIRO para tentar quebrar cache
+# Upgrade pip
 RUN pip install --upgrade pip
+
+# Comando para usar o argumento e quebrar o cache
+RUN echo "Cache bust: $CACHE_BUSTER"
 
 # Instalar ffmpeg robustamente...
 RUN apt-get update --no-cache && apt-get install -y --no-install-recommends ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
