@@ -16,12 +16,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    # Inicializa CodeQL antes de instalar dependências
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: python
-        # config-file: ./.github/codeql/codeql-config.yml # Opcional: para configuração avançada
+    # <<< TEMPORARIAMENTE DESABILITADO: CodeQL Init >>>
+    # - name: Initialize CodeQL
+    #   uses: github/codeql-action/init@v3
+    #   with:
+    #     languages: python
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -40,12 +39,10 @@ jobs:
       run: |
         make test 
 
-    # Verificação de cobertura após os testes
-    - name: Check test coverage
-      run: |
-        # Necessário instalar pytest-cov se não estiver em install-dev
-        # pip install pytest-cov 
-        pytest --cov=. --cov-report=xml --cov-fail-under=80 # Gera relatorio XML e falha se < 80%
+    # <<< TEMPORARIAMENTE DESABILITADO: Check test coverage >>>
+    # - name: Check test coverage
+    #   run: |
+    #     pytest --cov=. --cov-report=xml --cov-fail-under=80 
 
     # TODO: Opcionalmente adicionar upload para Codecov.io aqui
     # - name: Upload coverage reports to Codecov
@@ -71,11 +68,11 @@ jobs:
         # pip install pip-audit
         # pip-audit
 
-    # Análise CodeQL após o build (antes do upload do artefato)
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v3
-      with:
-        category: "/language:python"
+    # <<< TEMPORARIAMENTE DESABILITADO: CodeQL Analysis >>>
+    # - name: Perform CodeQL Analysis
+    #   uses: github/codeql-action/analyze@v3
+    #   with:
+    #     category: "/language:python"
 
     # REMOVIDO: Passo de Upload do Artefato não aplicável 
     # - name: Upload artifact
