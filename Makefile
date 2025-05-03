@@ -47,7 +47,10 @@ clean:
 	@echo "Limpeza concluída."
 
 install-dev:
-	@echo "==> Instalando dependências de desenvolvimento..."
+	@echo "==> Instalando dependências de desenvolvimento e aplicação..."
+	# Instala primeiro as dependências principais
+	pip install -r requirements.txt
+	# Depois as de desenvolvimento
 	pip install -r requirements-dev.txt
 
 help:
