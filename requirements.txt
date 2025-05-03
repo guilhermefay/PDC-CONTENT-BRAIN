@@ -10,7 +10,7 @@ uvicorn
 tiktoken
 python-jose[cryptography]
 python-dotenv
-python-multipart==0.0.5
+python-multipart
 PyJWT==2.8.0
 docling
 pytest>=8.3.3
