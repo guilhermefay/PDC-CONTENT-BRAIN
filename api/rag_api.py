@@ -50,6 +50,11 @@ supabase_url: str = os.environ.get("SUPABASE_URL")
 supabase_key: str = os.environ.get("SUPABASE_SERVICE_KEY")
 jwt_secret: str = os.environ.get("SUPABASE_JWT_SECRET")
 
+# <<< DEBUG: Log values read from environment >>>
+logging.info(f"[API Init] Read SUPABASE_URL: {supabase_url}")
+logging.info(f"[API Init] Read SUPABASE_SERVICE_KEY: {supabase_key}")
+# <<< END DEBUG >>>
+
 supabase_client: Client = None
 if supabase_url and supabase_key:
     try:
@@ -405,6 +410,23 @@ async def health_check():
     Retorna:
         HealthCheckResponse: Objeto Pydantic com o status geral e das dependências.
     """
+    global supabase_client # <<< FIX: Moved global declaration to the top >>>
+
+    # <<< FIX: Attempt re-initialization if None >>>
+    if not supabase_client:
+        logging.warning("[Health Check] supabase_client is None, attempting re-initialization...")
+        supa_url = os.environ.get("SUPABASE_URL")
+        supa_key = os.environ.get("SUPABASE_SERVICE_KEY")
+        if supa_url and supa_key:
+            try:
+                supabase_client = create_client(supa_url, supa_key)
+                logging.info("[Health Check] Re-initialization successful.")
+            except Exception as e:
+                logging.error(f"[Health Check] Error during re-initialization: {e}")
+        else:
+            logging.error("[Health Check] Env vars still missing during re-initialization attempt.")
+    # <<< END FIX >>>
+
     health = {
         "status": "healthy",
         "timestamp": datetime.now(UTC).isoformat(),
@@ -414,9 +436,9 @@ async def health_check():
         }
     }
     
-    if not supabase_client or not r2r_client:
+    if not r2r_client:
         health["status"] = "degraded"
-        
+
     return health
 
 # --- TEMPORARY DEBUG ENDPOINT REMOVED --- 

@@ -12,8 +12,8 @@ ETL_ARGS ?= --source gdrive # Define um padrão se não for passado
 .PHONY: test coverage run-etl start-api lint clean install-dev help
 
 test:
-	@echo "==> Rodando testes..."
-	$(PYTEST) -q tests/
+	@echo "==> Rodando testes (sem captura de output)..."
+	$(PYTEST) -q -s tests/
 
 coverage:
 	@echo "==> Rodando testes com cobertura..."
@@ -47,7 +47,10 @@ clean:
 	@echo "Limpeza concluída."
 
 install-dev:
-	@echo "==> Instalando dependências de desenvolvimento..."
+	@echo "==> Instalando dependências de desenvolvimento e aplicação..."
+	# Instala primeiro as dependências principais
+	pip install -r requirements.txt
+	# Depois as de desenvolvimento
 	pip install -r requirements-dev.txt
 
 help:

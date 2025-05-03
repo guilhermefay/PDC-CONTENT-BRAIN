@@ -1,0 +1,26 @@
+# requirements.in
+pytest-mock
+crewai
+crewai[tools]
+langchain
+langchain-community
+langchain-openai
+supabase
+assemblyai
+whisperx
+fastapi>=0.100.0
+uvicorn
+tiktoken
+python-jose[cryptography]
+python-dotenv
+python-multipart
+PyJWT==2.8.0
+docling
+pytest>=8.3.3
+r2r==3.5.18 # Mantendo a versão necessária para R2RClient
+requests
+google-api-python-client
+
+# Dev dependencies (from requirements-dev.txt)
+pytest-cov
+flake8 

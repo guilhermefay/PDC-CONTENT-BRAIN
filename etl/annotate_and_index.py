@@ -580,13 +580,13 @@ def run_pipeline(
         logger.info(f"Arquivo .env carregado de: {dotenv_path}")
 
     supabase_url = os.getenv("SUPABASE_URL")
-    # Chave de serviço para operações de escrita/admin no ETL
-    supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") 
+    # Usar SUPABASE_SERVICE_KEY consistentemente
+    supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY") 
     r2r_base_url = os.getenv("R2R_BASE_URL")
 
     # Validação movida para o início da função
-    if not all([supabase_url, supabase_key, r2r_base_url]):
-        logging.error("Variáveis de ambiente obrigatórias ausentes (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, R2R_BASE_URL)")
+    if not all([supabase_url, supabase_service_key, r2r_base_url]):
+        logging.error(f"Variáveis de ambiente obrigatórias ausentes: SUPABASE_URL={'OK' if supabase_url else 'FALTA'}, SUPABASE_SERVICE_KEY={'OK' if supabase_service_key else 'FALTA'}, R2R_BASE_URL={'OK' if r2r_base_url else 'FALTA'}")
         # Considerar levantar uma exceção em vez de return para testes
         raise ValueError("Missing required environment variables for pipeline execution.")
         # return
@@ -594,7 +594,7 @@ def run_pipeline(
     # Inicialização dos clientes e agentes dentro da função para escopo de execução
     # Isso permite mockar as instâncias durante os testes
     try:
-        supabase: Client = create_client(supabase_url, supabase_key)
+        supabase: Client = create_client(supabase_url, supabase_service_key) # Usar a variável correta
         logger.info("Cliente Supabase inicializado para pipeline ETL.")
     except Exception as e:
         logger.error(f"Erro ao inicializar cliente Supabase: {e}", exc_info=True)
