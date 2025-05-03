@@ -2,9 +2,9 @@ name: Python CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feat/bootstrap-taskmaster ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, feat/bootstrap-taskmaster ]
   # Adiciona execução agendada (ex: todo Domingo às 3:00 UTC)
   schedule:
     - cron: '0 3 * * 0'
