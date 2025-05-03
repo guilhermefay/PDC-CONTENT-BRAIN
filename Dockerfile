@@ -30,6 +30,6 @@ EXPOSE 8000
 # Define environment variable for the port (optional, Railway often injects $PORT)
 # ENV PORT=8000
 
-# Rodar o ETL automaticamente ao iniciar o container
+# Teste para verificar se o ENTRYPOINT é respeitado
 CMD []
-ENTRYPOINT ["python", "etl/annotate_and_index.py", "--source", "gdrive"] 
+ENTRYPOINT ["echo", ">>>>>> HELLO FROM DOCKER ENTRYPOINT! ETL SHOULD RUN AFTER THIS! <<<<<<"] 
