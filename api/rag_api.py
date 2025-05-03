@@ -50,6 +50,11 @@ supabase_url: str = os.environ.get("SUPABASE_URL")
 supabase_key: str = os.environ.get("SUPABASE_SERVICE_KEY")
 jwt_secret: str = os.environ.get("SUPABASE_JWT_SECRET")
 
+# <<< DEBUG: Log values read from environment >>>
+logging.info(f"[API Init] Read SUPABASE_URL: {supabase_url}")
+logging.info(f"[API Init] Read SUPABASE_SERVICE_KEY: {supabase_key}")
+# <<< END DEBUG >>>
+
 supabase_client: Client = None
 if supabase_url and supabase_key:
     try:
