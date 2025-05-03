@@ -310,8 +310,9 @@ iniconfig==2.1.0
     # via pytest
 instructor==1.7.9
     # via crewai
-ipython==9.2.0
-    # via pyvis
+ipython
+    # Requirement for ipykernel, jupyter-client, etc.
+    # Version removed to allow pip to select a compatible version in the build environment.
 ipython-pygments-lexers==1.1.1
     # via ipython
 jedi==0.19.2
