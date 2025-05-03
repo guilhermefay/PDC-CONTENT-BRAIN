@@ -1,1 +1,0 @@
-worker: python -m etl.annotate_and_index --source gdrive 
