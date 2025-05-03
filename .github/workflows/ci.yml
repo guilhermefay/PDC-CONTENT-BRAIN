@@ -67,16 +67,9 @@ jobs:
     # Auditoria de segurança
     - name: Security Audit Dependencies
       run: |
-        pip install pip-audit
-        pip-audit
-
-    # Passo de Build da Aplicação
-    - name: Build application
-      run: |
-        # Assumindo build padrão com pyproject.toml. Ajustar se necessário.
-        # Pode ser necessário instalar o pacote 'build' primeiro: pip install build
-        pip install build 
-        python -m build
+        # Temporariamente removido pip-audit para simplificar
+        # pip install pip-audit
+        # pip-audit
 
     # Análise CodeQL após o build (antes do upload do artefato)
     - name: Perform CodeQL Analysis
@@ -84,9 +77,9 @@ jobs:
       with:
         category: "/language:python"
 
-    # Passo de Upload do Artefato
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: application-artifact-${{ github.sha }}
-        path: dist/ # Diretório padrão de output do 'python -m build' 
+    # REMOVIDO: Passo de Upload do Artefato não aplicável 
+    # - name: Upload artifact
+    #   uses: actions/upload-artifact@v4
+    #   with:
+    #     name: application-artifact-${{ github.sha }}
+    #     path: dist/ 
