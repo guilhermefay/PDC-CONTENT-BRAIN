@@ -48,7 +48,7 @@ jobs:
       run: |
         make test
 
-    # Verificação de cobertura após os testes (desativado)
+    # (Passo de cobertura desativado)
 
     # <<< TEMPORARIAMENTE DESABILITADO: Check test coverage >>>
     # - name: Check test coverage
