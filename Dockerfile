@@ -41,6 +41,6 @@ EXPOSE 8000
 # Define environment variable for the port (optional, Railway often injects $PORT)
 # ENV PORT=8000
 
-# Teste para verificar se o ENTRYPOINT é respeitado -> Revertendo para rodar ETL
-CMD []
-ENTRYPOINT ["python", "-m", "etl.annotate_and_index", "--source", "gdrive"] 
+# Usar CMD (exec form) para rodar o ETL
+# ENTRYPOINT [] # Garantir que ENTRYPOINT está vazio ou comentado
+CMD ["python", "-m", "etl.annotate_and_index", "--source", "gdrive"] 
