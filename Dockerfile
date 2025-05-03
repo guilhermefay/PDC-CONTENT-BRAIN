@@ -1,3 +1,4 @@
+# Força rebuild para novo CMD do ETL
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
@@ -29,6 +30,5 @@ EXPOSE 8000
 # Define environment variable for the port (optional, Railway often injects $PORT)
 # ENV PORT=8000
 
-# Run uvicorn server when the container launches
-# Use 0.0.0.0 to allow connections from outside the container
+# Rodar o ETL automaticamente ao iniciar o container
 CMD ["python", "etl/annotate_and_index.py", "--source", "gdrive"] 
