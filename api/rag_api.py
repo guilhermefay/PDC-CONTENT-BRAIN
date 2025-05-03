@@ -405,6 +405,12 @@ async def health_check():
     Retorna:
         HealthCheckResponse: Objeto Pydantic com o status geral e das dependências.
     """
+    # <<< DEBUG: Log client status >>>
+    logging.info(f"[Health Check] Checking client status...")
+    logging.info(f"[Health Check] supabase_client is type: {type(supabase_client)}, truthy: {bool(supabase_client)}")
+    logging.info(f"[Health Check] r2r_client is type: {type(r2r_client)}, truthy: {bool(r2r_client)}")
+    # <<< END DEBUG >>>
+
     health = {
         "status": "healthy",
         "timestamp": datetime.now(UTC).isoformat(),
