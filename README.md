@@ -1,4 +1,8 @@
-# PDC Content Brain
+# PDC-CONTENT-BRAIN
+
+AI-powered content generation and analysis for PDC
+
+<!-- Test comment to trigger deploy -->
 
 Um sistema para ingerir, processar, anotar e indexar conteúdo do PDC (Pediatra de Sucesso) para consulta via RAG (Retrieval-Augmented Generation), utilizando R2R Cloud, Supabase e CrewAI.
 
@@ -174,5 +178,5 @@ Este projeto utiliza o [Task Master AI](https://github.com/your-repo/task-master
 *   Refinar controle de acesso (RLS/Folder-based).
 *   Melhorar monitoramento e dashboards.
 *   Configurar pipeline CI/CD completo (GitHub Actions).
-*   Otimizar performance do ETL e API.
+*   Otimizar performance do ETL e API. 
 *   Workflow: See [`dev_workflow.mdc`](mdc:.cursor/rules/dev_workflow.mdc) 
