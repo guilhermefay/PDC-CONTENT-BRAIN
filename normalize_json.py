@@ -2,44 +2,53 @@ import os
 import json
 import sys
 import traceback
+import base64
 
-path = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
-print(f"--- Python Script: Got path={path} ---", file=sys.stderr)
+# Obter o caminho do arquivo de saída
+output_path = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON')
+# Obter o conteúdo Base64
+base64_content = os.environ.get('GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64')
 
-if not path:
+print(f"--- Python Script: Got output_path={output_path} ---", file=sys.stderr)
+# Não imprimir o conteúdo base64 completo nos logs por segurança
+print(f"--- Python Script: Got GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64 (length={len(base64_content) if base64_content else 0}) ---", file=sys.stderr)
+
+if not output_path:
     print('ERROR: Missing GOOGLE_SERVICE_ACCOUNT_JSON environment variable in Python script', file=sys.stderr)
+    sys.exit(1)
+if not base64_content:
+    print('ERROR: Missing GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64 environment variable in Python script', file=sys.stderr)
     sys.exit(1)
 
 try:
-    print(f"--- Python Script: Trying to open {path} for reading ---", file=sys.stderr)
-    with open(path, 'r', encoding='utf-8') as f_read:
-        print(f"--- Python Script: File {path} opened for reading. Trying json.load() ---", file=sys.stderr)
-        # Tentar carregar diretamente do arquivo agora
-        data = json.load(f_read)
-        print(f"--- Python Script: json.load() successful ---", file=sys.stderr)
+    print(f"--- Python Script: Decoding Base64 content... ---", file=sys.stderr)
+    # Decodificar Base64
+    decoded_bytes = base64.b64decode(base64_content)
+    decoded_json_string = decoded_bytes.decode('utf-8')
+    print(f"--- Python Script: Base64 decoded successfully. ---", file=sys.stderr)
 
-    print(f"--- Python Script: Trying to open {path} for writing ---", file=sys.stderr)
-    with open(path, 'w', encoding='utf-8') as f_write:
-        print(f"--- Python Script: File {path} opened for writing. Trying json.dump() ---", file=sys.stderr)
-        json.dump(data, f_write, indent=2)
-        print(f"--- Python Script: json.dump() successful ---", file=sys.stderr)
+    print(f"--- Python Script: Writing decoded JSON to {output_path} ---", file=sys.stderr)
+    # Escrever o JSON decodificado no arquivo
+    with open(output_path, 'w', encoding='utf-8') as f_write:
+        f_write.write(decoded_json_string)
+    print(f"--- Python Script: Successfully wrote credentials to {output_path} ---", file=sys.stderr)
 
-except json.JSONDecodeError as e_decode:
-    print(f"ERROR: JSONDecodeError loading from {path}: {e_decode}", file=sys.stderr)
-    print(f"Line {e_decode.lineno}, Column {e_decode.colno}: {e_decode.msg}", file=sys.stderr)
-    # Se derro, tentar ler e imprimir o conteúdo problemático
-    try:
-        with open(path, 'r', encoding='utf-8') as f_prob:
-            content = f_prob.read()
-            print("\n--- Problematic File Content ---", file=sys.stderr)
-            print(content, file=sys.stderr)
-            print("--- End Problematic File Content ---", file=sys.stderr)
-    except Exception as e_read_prob:
-        print(f"ERROR: Could not even read the problematic file content: {e_read_prob}", file=sys.stderr)
+    # Opcional: Se a normalização ainda for necessária (provavelmente não mais)
+    # print(f"--- Python Script: Attempting to normalize {output_path} ---", file=sys.stderr)
+    # with open(output_path, 'r', encoding='utf-8') as f_read:
+    #     data = json.load(f_read)
+    # with open(output_path, 'w', encoding='utf-8') as f_norm_write:
+    #     json.dump(data, f_norm_write)
+    # print(f"--- Python Script: Normalization complete for {output_path} ---", file=sys.stderr)
+
+except base64.binascii.Error as b64_error:
+    print(f"ERROR: Base64 decoding failed: {b64_error}", file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
     sys.exit(1)
-except Exception as e_general:
-    print(f"ERROR: Unexpected error in normalize_json.py processing {path}:", file=sys.stderr)
+except Exception as e:
+    print(f"ERROR: Unexpected error in normalize_json.py processing: {e}", file=sys.stderr)
     traceback.print_exc(file=sys.stderr)
     sys.exit(1)
 
-print(f"--- Python Script: Successfully normalized {path} ---", file=sys.stderr) 
+# Se chegou aqui, tudo correu bem
+sys.exit(0) 
