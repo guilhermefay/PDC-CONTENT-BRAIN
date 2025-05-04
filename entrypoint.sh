@@ -10,10 +10,10 @@ fi
 echo "$GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64" | base64 -d > "$GOOGLE_SERVICE_ACCOUNT_JSON"
 echo "--- Credentials written to $GOOGLE_SERVICE_ACCOUNT_JSON ---"
 
-# Normalize JSON by calling the dedicated Python script
-python3 normalize_json.py
+# REMOVED JSON normalization step for testing
+# python3 normalize_json.py
 
-echo "--- JSON normalization attempted via normalize_json.py ---"
+echo "--- SKIPPING JSON normalization step ---"
 
 # Execute ETL pipeline
 exec python -m etl.annotate_and_index --source gdrive 
