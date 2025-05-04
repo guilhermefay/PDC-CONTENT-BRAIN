@@ -2,9 +2,7 @@
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
-# Argumento para quebrar o cache. Mude o valor se precisar forçar rebuild.
-# Comentado pois não estava funcionando confiavelmente.
-# ARG CACHE_BUSTER=3
+# Invalidate build cache test
 
 # Set the working directory in the container
 WORKDIR /app
@@ -29,14 +27,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && apt-g
 # O arquivo /app/gcp_creds.json será criado pelo Custom Start Command
 ENV GOOGLE_SERVICE_ACCOUNT_JSON=/app/gcp_creds.json
 
-# Copy the requirements file into the container
-COPY requirements.txt .
+# Copy the requirements file into the container at /app
+COPY requirements.txt /app/
 
 # Install any needed packages specified in requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code into the container
-COPY . .
+# Copy the entire project into the container
+COPY . /app
 
 # Copy the entrypoint script into the container
 COPY entrypoint.sh .
