@@ -46,5 +46,6 @@ COPY normalize_json.py .
 EXPOSE 8000
 
 # ENTRYPOINT ["/app/entrypoint.sh"] # REMOVIDO PARA TESTE
+ENTRYPOINT ["python3"]
 
 # Não definir CMD também, deixar o Start Command do Railway controlar 

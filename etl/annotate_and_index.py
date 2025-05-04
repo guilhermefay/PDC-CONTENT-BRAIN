@@ -27,6 +27,8 @@ Requer configuração via variáveis de ambiente (ver `.env.sample`).
 import logging
 import os
 import sys
+# --- Add subprocess import ---
+import subprocess
 print("--- DEBUG: annotate_and_index.py STARTING ---", file=sys.stderr)
 try:
     # Adiciona o diretório raiz do projeto ao PYTHONPATH
@@ -35,8 +37,27 @@ try:
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
     print(f"--- DEBUG: Project root added to sys.path: {project_root} ---", file=sys.stderr)
-except Exception as e_path:
-    print(f"--- DEBUG: ERROR setting sys.path: {e_path} ---", file=sys.stderr)
+
+    # --- Execute normalize_json.py ---
+    normalize_script_path = os.path.join(os.path.dirname(__file__), '..', 'normalize_json.py') # Assumes it's in the root /app
+    normalize_script_path = os.path.abspath(normalize_script_path) # Get absolute path
+    print(f"--- DEBUG: Attempting to run normalize_json.py at {normalize_script_path} ---", file=sys.stderr)
+    # Ajuste para caminho relativo simples assumindo que Docker WORKDIR é /app
+    normalize_script_in_container = 'normalize_json.py' 
+    result = subprocess.run(['python3', normalize_script_in_container], check=True, capture_output=True, text=True)
+    print(f"--- DEBUG: normalize_json.py stdout:
+{result.stdout} ---", file=sys.stderr)
+    print(f"--- DEBUG: normalize_json.py stderr:
+{result.stderr} ---", file=sys.stderr)
+    print(f"--- DEBUG: normalize_json.py finished successfully ---", file=sys.stderr)
+    # --- Fim da execução ---
+
+except Exception as e_init:
+    print(f"--- DEBUG: ERROR during initial setup or normalize_json execution: {e_init} ---", file=sys.stderr)
+    # Imprimir traceback completo para depuração
+    import traceback
+    traceback.print_exc(file=sys.stderr)
+    sys.exit(1) # Sair se a preparação falhar
 # --- DEBUG LOG FIM --- 
 
 import argparse
