@@ -654,8 +654,8 @@ def process_single_chunk(
         return False
 
 def run_pipeline(
-    source: str,
-    local_dir: str,
+    # REMOVIDO: source: str,
+    local_dir: str, # Mantido, embora não usado se source for sempre gdrive
     dry_run: bool,
     dry_run_limit: Optional[int],
     skip_annotation: bool,
@@ -665,10 +665,15 @@ def run_pipeline(
 ):
     """
     Orquestra todo o pipeline ETL: ingestão, chunking, anotação e indexação.
+    Assume a fonte 'gdrive' por padrão agora.
     """
-    # ADICIONAR LOG AQUI
-    logger.debug(f"[DEBUG run_pipeline ENTRY] source='{source}', local_dir='{local_dir}', skip_annotation={skip_annotation}, skip_indexing={skip_indexing}")
-    logging.info(f"Iniciando pipeline ETL... Fonte: {source}, Local: {local_dir}, Skip Annotation: {skip_annotation}, Skip Indexing: {skip_indexing}")
+    # Definir a fonte internamente ou obter de ENV VAR se necessário no futuro
+    source = 'gdrive' # Assumir gdrive
+
+    # Log de Debug atualizado para não mostrar mais 'source' como argumento
+    logger.debug(f"[DEBUG run_pipeline ENTRY] local_dir='{local_dir}', skip_annotation={skip_annotation}, skip_indexing={skip_indexing}")
+    # Log de Info atualizado
+    logging.info(f"Iniciando pipeline ETL... Fonte (fixa): {source}, Local: {local_dir}, Skip Annotation: {skip_annotation}, Skip Indexing: {skip_indexing}")
 
     # Inicializar AnnotatorAgent (se necessário)
     annotator = None
@@ -681,28 +686,19 @@ def run_pipeline(
             skip_annotation = True # Forçar pulo da anotação se falhar
     # --- Fim Modificado ---
 
-    # --- Lógica de Ingestão ---\
+    # --- Lógica de Ingestão ---
     all_source_data = []
     processed_files_count = 0
     temp_download_dir = None # Inicializar diretório temporário
 
     try:
-        if source == 'gdrive':
-             # Criar diretório temporário para downloads do GDrive
-             temp_download_dir = tempfile.mkdtemp(prefix="gdrive_videos_")
-             logging.info(f"Diretório temporário para vídeos do GDrive: {temp_download_dir}")
-             # Passar supabase client para a função de ingestão
-             ingested_data = ingest_all_gdrive_content(target_dir=temp_download_dir, supabase_client=supabase)
-             all_source_data.extend(ingested_data)
-             processed_files_count = len(ingested_data) # Contagem inicial baseada no que foi retornado
-        elif source == 'local':
-             # ingest_local_directory já retorna o formato esperado List[Dict[str, Any]]
-             ingested_data = ingest_local_directory(local_dir)
-             all_source_data.extend(ingested_data)
-             processed_files_count = len(ingested_data)
-        else:
-             logging.error(f"Fonte desconhecida: {source}. Use 'gdrive' ou 'local'.")
-             return # Sair se a fonte for inválida
+        # Criar diretório temporário para downloads do GDrive
+        temp_download_dir = tempfile.mkdtemp(prefix="gdrive_videos_")
+        logging.info(f"Diretório temporário para vídeos do GDrive: {temp_download_dir}")
+        # Passar supabase client para a função de ingestão
+        ingested_data = ingest_all_gdrive_content(target_dir=temp_download_dir, supabase_client=supabase)
+        all_source_data.extend(ingested_data)
+        processed_files_count = len(ingested_data) # Contagem inicial baseada no que foi retornado
 
     except Exception as e_ingest:
          logging.error(f"Erro durante a fase de ingestão da fonte '{source}': {e_ingest}", exc_info=True)
@@ -844,32 +840,38 @@ def run_pipeline(
 
 def main():
     parser = argparse.ArgumentParser(description="Pipeline ETL para RAG - Modo Consulta Supabase")
-    # Remover argumentos de ingestão que não são mais usados por run_pipeline
+    # REMOVIDO: Argumento --source já não é necessário na linha de comando
     # parser.add_argument("--source", choices=['gdrive', 'local'], default='gdrive', help="Fonte dos dados (gdrive ou local).")
+    # REMOVIDO: Argumento --local-dir não é usado se a fonte for sempre gdrive
     # parser.add_argument("--local-dir", type=str, default="/app/local_data", help="Diretório para ingestão local.")
+    # REMOVIDO: Argumentos dry-run não são aplicáveis neste fluxo
     # parser.add_argument("--dry-run", action="store_true", help="Executar em modo dry-run.")
     # parser.add_argument("--dry-run-limit", type=int, default=None, help="Limitar número de arquivos no dry-run.")
     parser.add_argument("--skip-annotation", action="store_true", help="Pular a etapa de anotação com CrewAI.")
     parser.add_argument("--skip-indexing", action="store_true", help="Pular a etapa de indexação no R2R Cloud.")
-    parser.add_argument("--batch-size", type=int, default=100, help="Tamanho do lote para buscar chunks do Supabase.")
+    parser.add_argument("--batch-size", type=int, default=100, help="Tamanho do lote para buscar chunks do Supabase.") # Mantido, mas não usado neste fluxo
     parser.add_argument("--max-workers", type=int, default=5, help="Número máximo de workers para processar chunks em paralelo.")
 
     args = parser.parse_args()
 
-    logger.info("Iniciando pipeline ETL (Modo Consulta Supabase)...")
+    # REMOVIDO: Log antigo que mencionava "Modo Consulta Supabase"
+    # logger.info("Iniciando pipeline ETL (Modo Consulta Supabase)...")
+    logger.info("Iniciando pipeline ETL (Fonte GDrive fixa)...") # Log atualizado
 
     run_pipeline(
-        source='supabase', # Fonte agora é implícita
-        local_dir='', # Não usado
-        dry_run=False, # Não aplicável
-        dry_run_limit=None, # Não aplicável
+        # REMOVIDO: source='supabase',
+        local_dir='', # Passar vazio, não é usado
+        dry_run=False, # Passar False, não é usado
+        dry_run_limit=None, # Passar None, não é usado
         skip_annotation=args.skip_annotation,
         skip_indexing=args.skip_indexing,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size, # Passado, mas não usado internamente agora
         max_workers_pipeline=args.max_workers
     )
 
-    logger.info("Pipeline ETL (Modo Consulta Supabase) finalizada.")
+    # REMOVIDO: Log antigo
+    # logger.info("Pipeline ETL (Modo Consulta Supabase) finalizada.")
+    logger.info("Pipeline ETL (Fonte GDrive fixa) finalizada.") # Log atualizado
 
 if __name__ == "__main__":
     main() 
