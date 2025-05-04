@@ -49,11 +49,14 @@ import uuid
 import shutil # Adicionado para limpeza de diretório
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
-# --- Comentado para Debug ---
+# --- Comentado para Debug (locais) ---
 # from agents.annotator_agent import AnnotatorAgent
-from supabase import create_client, Client, PostgrestAPIResponse
-from postgrest.exceptions import APIError
+# --- Comentado para Debug (terceiros suspeitos) ---
+# from supabase import create_client, Client, PostgrestAPIResponse
+# from postgrest.exceptions import APIError
+# --- Fim Comentado ---
 from concurrent.futures import ThreadPoolExecutor, as_completed
+# --- Comentado para Debug (locais) ---
 # from infra.r2r_client import R2RClientWrapper
 # from ingestion.gdrive_ingest import ingest_all_gdrive_content
 # from ingestion.local_ingest import ingest_local_directory
