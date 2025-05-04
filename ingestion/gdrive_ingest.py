@@ -357,106 +357,151 @@ def ingest_gdrive_folder(
     Returns:
         List[Dict[str, Any]]: Lista de dicionários representando os itens ingeridos.
     """
-    logger.info(f"\nIniciando ingestão da pasta: {folder_name} (ID: {folder_id}, Access: {access_level}){ ' (DRY RUN)' if dry_run else ''}")
-    ingested_data = []
+    logger.info(f"\nIniciando ingestão da pasta: {folder_name} (ID: {folder_id}, Access: {access_level})")
+
     page_token = None
-    processed_in_this_folder = 0 # Contador para arquivos processados *nesta* chamada
+    items_in_page = 0
+    processed_in_folder = 0
+    all_files_in_folder = [] # Lista para acumular arquivos de todas as páginas
 
-    try:
-        while True: # Loop de paginação
+    while True: # Loop para paginação
+        try:
+            # Listar arquivos/pastas na pasta atual
+            response = service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                # pageSize=5, # DEBUG: Forçar paginação
+                spaces='drive',
+                fields='nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, size, parents, capabilities, webViewLink)', # Adicionado webViewLink
+                pageToken=page_token
+            ).execute()
+
+            files_in_current_page = response.get('files', [])
+            items_in_page = len(files_in_current_page)
+            logger.info(f"  Encontrados {items_in_page} itens nesta página para {folder_name}...")
+            all_files_in_folder.extend(files_in_current_page) # Acumular arquivos
+
+            page_token = response.get('nextPageToken', None)
+            if page_token is None:
+                logger.debug(f"  Não há mais páginas para {folder_name}.")
+                break # Sai do loop while se não houver mais páginas
+
+        except HttpError as error:
+            logger.error(f"Erro HTTP ao listar itens na pasta {folder_id} ({folder_name}): {error}")
+            break # Sair do loop em caso de erro na listagem
+        except Exception as e:
+            logger.error(f"Erro inesperado ao listar itens na pasta {folder_id} ({folder_name}): {e}", exc_info=True)
+            break # Sair do loop
+
+    # AGORA, iterar sobre a lista acumulada de TODOS os arquivos da pasta
+    logger.info(f"  Processando {len(all_files_in_folder)} itens totais encontrados em {folder_name}...")
+    for item in all_files_in_folder:
+        file_id = item.get('id')
+        file_name = item.get('name')
+        mime_type = item.get('mimeType')
+        item_path_log = f"{folder_name}/{file_name}" # Path para logging
+
+        # Ignorar arquivos do Mac OS
+        if file_name.startswith('._') or file_name == '.DS_Store':
+            logger.debug(f"   -> Ignorando arquivo de sistema Mac OS: {item_path_log}")
+            continue
+
+        # --- Verificação no Supabase (Antes de baixar/processar) ---
+        if supabase_client and file_id:
             try:
-                # Listar todos os itens na pasta (filtragem de tipos realizada posteriormente)
-                response = service.files().list(
-                    q=f"'{folder_id}' in parents and trashed=false",
-                    spaces='drive',
-                    fields='nextPageToken, files(id, name, mimeType, size)',
-                    pageToken=page_token,
-                    pageSize=100
-                ).execute()
-            except HttpError as list_error:
-                logger.error(f"Erro HTTP ao listar arquivos na página (token: {page_token}) da pasta {folder_name}: {list_error}")
-                break 
-            except Exception as list_exc:
-                logger.error(f"Erro inesperado ao listar arquivos na página (token: {page_token}) da pasta {folder_name}: {list_exc}", exc_info=True)
-                break 
+                logger.debug(f"  [Check Supabase] Verificando se file_id '{file_id}' existe em 'processed_files'...")
+                supabase_response = supabase_client.table('processed_files')\\
+                                        .select('file_id', count='exact')\\
+                                        .eq('file_id', file_id)\\
+                                        .execute()
 
-            files = response.get('files', [])
-            if not files and not page_token:
-                 logger.info(f"  Nenhum item encontrado na pasta {folder_name}.")
-                 break 
+                if supabase_response.count > 0:
+                    logger.info(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) já existe em 'processed_files'. Pulando.")
+                    continue # Pular para o próximo item se já processado
+                else:
+                    logger.debug(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) não encontrado. Prosseguindo com o processamento.")
 
-            logger.info(f"  Encontrados {len(files)} itens nesta página para {folder_name}...")
+            except APIError as api_error:
+                # Tratar erros específicos da API (ex: tabela não existe - deve ter sido criada antes)
+                logger.error(f"  [Check Supabase] Erro API ao verificar {file_name} (ID: {file_id}): {api_error.message}")
+                logger.warning(f"  [Check Supabase] Pulando arquivo {file_name} devido a erro na verificação.")
+                continue # Pular este arquivo se a verificação falhar
+            except Exception as check_exc:
+                logger.error(f"  [Check Supabase] Erro inesperado ao verificar {file_name} (ID: {file_id}): {check_exc}", exc_info=True)
+                logger.warning(f"  [Check Supabase] Pulando arquivo {file_name} devido a erro inesperado na verificação.")
+                continue # Pular este arquivo
 
-            for file in files:
-                file_id = file.get('id')
-                file_name = file.get('name')
-                mime_type = file.get('mimeType')
-                file_size = file.get('size')
+        # Caso 1: É uma pasta - processar recursivamente
+        if mime_type == 'application/vnd.google-apps.folder':
+            # Passar o nível de acesso herdado para a subpasta
+            # Obter a capacidade de leitura da pasta (pode indicar acesso)
+            can_read_folder = item.get('capabilities', {}).get('canRead', True) # Assumir True se não especificado
+            subfolder_access = access_level if can_read_folder else "Denied" # Simplificado
 
-                file_data = None
+            logger.info(f"  Identificada SUBPASTA: {file_name} (ID: {file_id}). Iniciando ingestão recursiva...")
+            sub_folder_results = ingest_gdrive_folder(service, file_name, file_id, temp_dir_path, dry_run, access_level=subfolder_access)
+            results.extend(sub_folder_results)
+            continue # Pula para o próximo item após processar subpasta
 
-                # ===== Verificar se já foi processado (ANTES de qualquer download/processamento) =====
-                if file_id and supabase_client and mime_type != 'application/vnd.google-apps.folder': # Não verificar pastas
+        # Caso 2: É um vídeo
+        elif mime_type in VIDEO_MIME_TYPES:
+            logger.info(f"  Identificado VÍDEO: {file_name} (ID: {file_id}, Tipo: {mime_type})")
+            if dry_run:
+                # ... (lógica dry_run existente) ...
+                file_data = {"type": "video", "id": file_id, "name": file_name, "path": "dry_run_video", "metadata": {"access_level": access_level}}
+                logger.info(f"    -> DRY RUN: Video {file_name} seria baixado.")
+            else:
+                video_bytes = download_file(service, file_id)
+                if video_bytes:
+                    safe_filename = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '_')).rstrip()
+                    video_path = os.path.join(temp_dir_path, safe_filename)
                     try:
-                        # Usar file_id que é o gdrive_id
-                        logger.debug(f"  [Check Supabase] Verificando se file_id '{file_id}' existe em 'processed_files'...")
-                        # Renomear variável para evitar conflito
-                        supabase_response = supabase_client.table('processed_files')\
-                                                .select('file_id', count='exact')\
-                                                .eq('file_id', file_id)\
-                                                .execute()
-
-                        # Verificar o atributo count da nova variável
-                        if supabase_response.count > 0:
-                            logger.info(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) já existe em 'processed_files'. Pulando.")
-                            continue # Pula para o próximo arquivo neste loop
-                        else:
-                            logger.debug(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) não encontrado em 'processed_files'. Prosseguindo.")
-
-                    except APIError as api_err:
-                        logger.error(f"  [Check Supabase] Erro API ao verificar {file_name} (ID: {file_id}): {api_err}")
-                        # Decisão: Pular este arquivo se a verificação falhar para evitar reprocessamento acidental?
-                        # Por segurança, vamos pular se não pudermos confirmar que *não* foi processado.
-                        logger.warning(f"  [Check Supabase] Pulando arquivo {file_name} devido a erro na verificação.")
-                        continue
-                    except Exception as e:
-                        logger.error(f"  [Check Supabase] Erro inesperado ao verificar {file_name} (ID: {file_id}): {e}", exc_info=True)
-                        # Pular também em caso de erro inesperado na verificação
-                        logger.warning(f"  [Check Supabase] Pulando arquivo {file_name} devido a erro inesperado na verificação.")
-                        continue
-                elif not file_id:
-                    logger.warning(f"  Arquivo '{file_name}' sem ID encontrado na pasta {folder_name}. Pulando.")
-                    continue
-                elif not supabase_client:
-                    # Apenas logar uma vez se o cliente não estiver disponível?
-                    # Já logado na inicialização, talvez não precise aqui.
-                    pass # Continuar sem verificação se o cliente não foi inicializado
-
-                # ===== Fim da Verificação =====
-
-                # ===== MODIFICAÇÃO AQUI: Tratar Pastas Recursivamente =====
-                if mime_type == 'application/vnd.google-apps.folder':
-                    logger.info(f"  Identificada SUBPASTA: {file_name} (ID: {file_id}). Iniciando ingestão recursiva...")
-                    subfolder_data = ingest_gdrive_folder(
-                        service,
-                        f"{folder_name}/{file_name}",  # Constrói nome hierárquico
-                        file_id,
-                        temp_dir_path,
-                        dry_run=dry_run,
-                        access_level=access_level
-                    )
-                    ingested_data.extend(subfolder_data) # Adiciona resultados da subpasta
-                    continue # Pula para o próximo item na pasta atual
-                # ===== MODIFICAÇÃO: Processar IMAGENS =====
-                elif is_supported_image(file):
-                    logger.info(f"  Identificada IMAGEM: {file_name} (ID: {file_id}, Tipo: {mime_type})")
-                    if dry_run:
+                        with open(video_path, 'wb') as f:
+                            f.write(video_bytes)
                         file_data = {
-                            "type": "image",
+                            "type": "video",
                             "id": file_id,
                             "name": file_name,
-                            "content": None,
-                            "embeddings": None,
+                            "path": video_path,
+                            "metadata": {
+                                "gdrive_id": file_id,
+                                "gdrive_name": file_name,
+                                "gdrive_mime": mime_type,
+                                "gdrive_folder_name": folder_name, # Manter nome da pasta pai imediata?
+                                "gdrive_folder_id": folder_id,
+                                "access_level": access_level
+                            }
+                        }
+                        logger.info(f"    -> Vídeo {file_name} baixado para {video_path}")
+                    except IOError as e:
+                        logger.error(f"    -> Erro ao salvar vídeo {file_name} em {video_path}: {e}")
+                else:
+                    logger.warning(f"    -> Falha ao baixar o vídeo: {file_name} (ID: {file_id})")
+
+        # Caso 3: É um documento
+        elif mime_type in SUPPORTED_MIME_TYPES:
+            logger.info(f"  Identificado DOCUMENTO: {file_name} (ID: {file_id}, Tipo: {mime_type})")
+            if dry_run:
+                # ... (lógica dry_run existente) ...
+                file_data = {"type": "document", "id": file_id, "name": file_name, "content": "dry_run_content", "metadata": {"access_level": access_level}}
+                logger.info(f"    -> DRY RUN: Documento {file_name} seria baixado/exportado e processado.")
+            else:
+                file_content_bytes = None
+                effective_mime_type = mime_type
+                if mime_type == 'application/vnd.google-apps.document':
+                    file_content_bytes = export_and_download_gdoc(service, file_id, GDRIVE_EXPORT_MIME)
+                    effective_mime_type = GDRIVE_EXPORT_MIME
+                elif mime_type in DOCUMENT_MIME_TYPES:
+                    file_content_bytes = download_file(service, file_id)
+                # else: Bloco removido pois já tratado por SUPPORTED_MIME_TYPES
+
+                if file_content_bytes:
+                    text_content = extract_text_from_file(effective_mime_type, file_content_bytes, file_name)
+                    if text_content:
+                        file_data = {
+                            "type": "document",
+                            "id": file_id,
+                            "name": file_name,
+                            "content": text_content,
                             "metadata": {
                                 "gdrive_id": file_id,
                                 "gdrive_name": file_name,
@@ -466,127 +511,21 @@ def ingest_gdrive_folder(
                                 "access_level": access_level
                             }
                         }
-                        logger.info(f"    -> DRY RUN: Imagem {file_name} seria processada.")
+                        logger.info(f"    -> Texto extraído com sucesso de {file_name}.")
                     else:
-                        image_bytes = download_file(service, file_id)
-                        if image_bytes:
-                            text = image_processor.extract_text(image_bytes)
-                            metadata = image_processor.extract_metadata(image_bytes)
-                            embeddings = image_processor.generate_embeddings(image_bytes)
-                            file_data = {
-                                "type": "image",
-                                "id": file_id,
-                                "name": file_name,
-                                "content": text,
-                                "embeddings": embeddings,
-                                "metadata": {
-                                    "gdrive_id": file_id,
-                                    "gdrive_name": file_name,
-                                    "gdrive_mime": mime_type,
-                                    "gdrive_folder_name": folder_name,
-                                    "gdrive_folder_id": folder_id,
-                                    "access_level": access_level,
-                                    **metadata
-                                }
-                            }
-                            logger.info(f"    -> Imagem {file_name} processada: texto extraído={bool(text)}, embeddings obtidos={len(embeddings) if embeddings else 0}")
-                        else:
-                            logger.warning(f"    -> Falha ao baixar a imagem: {file_name} (ID: {file_id})")
-                # ============================================================
-
-                # 1. Processar VÍDEOS
-                elif mime_type in VIDEO_MIME_TYPES:
-                    logger.info(f"  Identificado VÍDEO: {file_name} (ID: {file_id}, Tipo: {mime_type}, Tamanho: {file_size})")
-                    if dry_run:
-                        # ... (lógica dry_run existente) ...
-                        file_data = {"type": "video", "id": file_id, "name": file_name, "path": "dry_run_video", "metadata": {"access_level": access_level}}
-                        logger.info(f"    -> DRY RUN: Video {file_name} seria baixado.")
-                    else:
-                        video_bytes = download_file(service, file_id)
-                        if video_bytes:
-                            safe_filename = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '_')).rstrip()
-                            video_path = os.path.join(temp_dir_path, safe_filename)
-                            try:
-                                with open(video_path, 'wb') as f:
-                                    f.write(video_bytes)
-                                file_data = {
-                                    "type": "video",
-                                    "id": file_id,
-                                    "name": file_name,
-                                    "path": video_path,
-                                    "metadata": {
-                                        "gdrive_id": file_id,
-                                        "gdrive_name": file_name,
-                                        "gdrive_mime": mime_type,
-                                        "gdrive_folder_name": folder_name, # Manter nome da pasta pai imediata?
-                                        "gdrive_folder_id": folder_id,
-                                        "access_level": access_level
-                                    }
-                                }
-                                logger.info(f"    -> Vídeo {file_name} baixado para {video_path}")
-                            except IOError as e:
-                                logger.error(f"    -> Erro ao salvar vídeo {file_name} em {video_path}: {e}")
-                        else:
-                            logger.warning(f"    -> Falha ao baixar o vídeo: {file_name} (ID: {file_id})")
-
-                # 2. Processar DOCUMENTOS
-                elif mime_type in SUPPORTED_MIME_TYPES:
-                    logger.info(f"  Identificado DOCUMENTO: {file_name} (ID: {file_id}, Tipo: {mime_type})")
-                    if dry_run:
-                        # ... (lógica dry_run existente) ...
-                        file_data = {"type": "document", "id": file_id, "name": file_name, "content": "dry_run_content", "metadata": {"access_level": access_level}}
-                        logger.info(f"    -> DRY RUN: Documento {file_name} seria baixado/exportado e processado.")
-                    else:
-                        file_content_bytes = None
-                        effective_mime_type = mime_type
-                        if mime_type == 'application/vnd.google-apps.document':
-                            file_content_bytes = export_and_download_gdoc(service, file_id, GDRIVE_EXPORT_MIME)
-                            effective_mime_type = GDRIVE_EXPORT_MIME
-                        elif mime_type in DOCUMENT_MIME_TYPES:
-                            file_content_bytes = download_file(service, file_id)
-                        # else: Bloco removido pois já tratado por SUPPORTED_MIME_TYPES
-
-                        if file_content_bytes:
-                            text_content = extract_text_from_file(effective_mime_type, file_content_bytes, file_name)
-                            if text_content:
-                                file_data = {
-                                    "type": "document",
-                                    "id": file_id,
-                                    "name": file_name,
-                                    "content": text_content,
-                                    "metadata": {
-                                        "gdrive_id": file_id,
-                                        "gdrive_name": file_name,
-                                        "gdrive_mime": mime_type,
-                                        "gdrive_folder_name": folder_name,
-                                        "gdrive_folder_id": folder_id,
-                                        "access_level": access_level
-                                    }
-                                }
-                                logger.info(f"    -> Texto extraído com sucesso de {file_name}.")
-                            else:
-                                logger.warning(f"    -> Falha ao extrair texto de {file_name} após download/export.")
-                        else:
-                             logger.warning(f"    -> Falha ao obter conteúdo binário para {file_name} (ID: {file_id}).")
-
+                        logger.warning(f"    -> Falha ao extrair texto de {file_name} após download/export.")
                 else:
-                    logger.warning(f"  -> Item ignorado (tipo MIME não suportado ou não é pasta): {file_name} ({mime_type})")
+                     logger.warning(f"    -> Falha ao obter conteúdo binário para {file_name} (ID: {file_id}).")
 
-                # Se o arquivo foi processado (vídeo ou doc), adiciona aos dados
-                if file_data:
-                    ingested_data.append(file_data)
-                    processed_in_this_folder += 1
+        else:
+            logger.warning(f"  -> Item ignorado (tipo MIME não suportado ou não é pasta): {file_name} ({mime_type})")
 
-            page_token = response.get('nextPageToken', None)
-            logger.debug(f"Processamento da página concluído para pasta {folder_name}. Próximo pageToken: {page_token}")
-            if page_token is None:
-                logger.info(f"  Fim da listagem para a pasta {folder_name}.")
-                break
+        # Se o arquivo foi processado (vídeo ou doc), adiciona aos dados
+        if file_data:
+            ingested_data.append(file_data)
+            processed_in_folder += 1
 
-    except Exception as e:
-        logger.error(f"Erro inesperado durante a ingestão da pasta {folder_name}: {e}", exc_info=True)
-
-    logger.info(f"Ingestão da pasta {folder_name} e subpastas concluída. Total de itens processados nesta chamada recursiva: {processed_in_this_folder}")
+    logger.info(f"Ingestão da pasta {folder_name} e subpastas concluída. Total de itens processados nesta chamada recursiva: {processed_in_folder}")
     return ingested_data
 
 def ingest_all_gdrive_content(dry_run=False):
