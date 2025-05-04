@@ -409,9 +409,9 @@ def ingest_gdrive_folder(
         if supabase_client and file_id:
             try:
                 logger.debug(f"  [Check Supabase] Verificando se file_id '{file_id}' existe em 'processed_files'...")
-                supabase_response = supabase_client.table('processed_files')\\
-                                        .select('file_id', count='exact')\\
-                                        .eq('file_id', file_id)\\
+                supabase_response = supabase_client.table('processed_files') \
+                                        .select('file_id', count='exact') \
+                                        .eq('file_id', file_id) \
                                         .execute()
 
                 if supabase_response.count > 0:
