@@ -49,14 +49,16 @@ import uuid
 import shutil # Adicionado para limpeza de diretório
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
-from agents.annotator_agent import AnnotatorAgent
+# --- Comentado para Debug ---
+# from agents.annotator_agent import AnnotatorAgent
 from supabase import create_client, Client, PostgrestAPIResponse
 from postgrest.exceptions import APIError
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from infra.r2r_client import R2RClientWrapper
-from ingestion.gdrive_ingest import ingest_all_gdrive_content
-from ingestion.local_ingest import ingest_local_directory
-from ingestion.video_transcription import process_all_videos_in_directory
+# from infra.r2r_client import R2RClientWrapper
+# from ingestion.gdrive_ingest import ingest_all_gdrive_content
+# from ingestion.local_ingest import ingest_local_directory
+# from ingestion.video_transcription import process_all_videos_in_directory
+# --- Fim Comentado ---
 
 # Configurar logging GLOBALMENTE
 # Mudar level para DEBUG para ver logs mais detalhados
