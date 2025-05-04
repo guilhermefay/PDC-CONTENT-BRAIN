@@ -6,6 +6,9 @@ FROM python:3.11-slim
 # Comentado pois não estava funcionando confiavelmente.
 # ARG CACHE_BUSTER=3
 
+# Set environment variables to ensure libraries are found
+ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+
 # Set the working directory in the container
 WORKDIR /app
 
@@ -17,7 +20,10 @@ RUN pip install --upgrade pip
 # RUN echo "Cache bust: $CACHE_BUSTER"
 
 # Instalar ffmpeg robustamente...
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && apt-get clean && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg libavcodec-dev libavformat-dev libswscale-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Argumento removido - arquivo será criado no runtime
 # ARG GOOGLE_CREDS_JSON_CONTENT
