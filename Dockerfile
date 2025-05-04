@@ -45,5 +45,6 @@ COPY normalize_json.py .
 # Make port 8000 available (opcional, mas inofensivo)
 EXPOSE 8000
 
-# Set the entrypoint to the entrypoint script
-ENTRYPOINT ["./entrypoint.sh"] 
+# ENTRYPOINT ["/app/entrypoint.sh"] # REMOVIDO PARA TESTE
+
+# Não definir CMD também, deixar o Start Command do Railway controlar 

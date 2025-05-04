@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-echo "--- ENTRYPOINT: Trying simple python print --- "
+echo "--- ENTRYPOINT: Script started (No Python here) ---"
 
-python3 -c "import sys; print('--- PYTHON: Hello from simple Python! ---', file=sys.stderr)"
+# Placeholder - this script does nothing now except echo
 
-echo "--- ENTRYPOINT: Simple python print finished --- "
+echo "--- ENTRYPOINT: Script finished ---"
 
-# exit 0 # Comentado para ver se o container continua ou falha depois 
+exit 0 
