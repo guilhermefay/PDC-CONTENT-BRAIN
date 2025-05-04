@@ -95,6 +95,7 @@ IGNORED_EXTENSIONS = {
     '.exe', '.dll', '.so', '.class', '.jar', '.md', # Ignorar Markdown por enquanto
     # Adicionar extensões de imagem comuns
     '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp',
+    '.heic', # Adicionar HEIC
     # Adicionar outras extensões se necessário
 }
 # --- Fim Constantes de Filtragem ---
