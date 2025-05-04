@@ -2,7 +2,9 @@
 # Use an official Python runtime as a parent image
 FROM python:3.11-slim
 
-# Invalidate build cache test
+# Argumento para quebrar o cache. Mude o valor se precisar forçar rebuild.
+# Comentado pois não estava funcionando confiavelmente.
+# ARG CACHE_BUSTER=3
 
 # Set the working directory in the container
 WORKDIR /app

@@ -529,12 +529,12 @@ def ingest_gdrive_folder(
     # 1. Paginação: Coletar todos os itens da pasta primeiro
     while True:
         try:
-            response = service.files().list(
-                q=f"'{folder_id}' in parents and trashed=false",
-                spaces='drive',
+                response = service.files().list(
+                    q=f"'{folder_id}' in parents and trashed=false",
+                    spaces='drive',
                 fields='nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, size, parents, capabilities, webViewLink)',
                 pageToken=page_token
-            ).execute()
+                ).execute()
 
             files_in_current_page = response.get('files', [])
             logger.info(f"  Encontrados {len(files_in_current_page)} itens nesta página para {folder_path_log}...")
@@ -608,7 +608,7 @@ def ingest_gdrive_folder(
         text_content = None
         file_data_for_chunking = None # Dados a serem usados para chunk/save
 
-        if mime_type == 'application/vnd.google-apps.folder':
+                if mime_type == 'application/vnd.google-apps.folder':
             # --- Processar Subpasta (Recursão) ---
             logger.info(f"  Identificada SUBPASTA: {file_name}. Iniciando ingestão recursiva...")
             if not dry_run:
@@ -647,13 +647,13 @@ def ingest_gdrive_folder(
                         }
                     else:
                         logger.warning(f"   -> Falha ao extrair texto de {item_path_log}.")
-                else:
+                        else:
                     logger.warning(f"   -> Falha ao baixar/exportar {item_path_log}.")
             except Exception as doc_proc_err:
                  logger.error(f"   -> Erro inesperado ao processar documento {item_path_log}: {doc_proc_err}", exc_info=True)
                  overall_success = False # Marcar falha
 
-        elif mime_type in VIDEO_MIME_TYPES:
+                elif mime_type in VIDEO_MIME_TYPES:
              # --- Processar Vídeo ---
             file_size_mb = int(item.get('size', 0)) / (1024 * 1024)
             logger.info(f"  Identificado VÍDEO: {item_path_log} (ID: {file_id}, Tipo: {mime_type}, Tamanho: {file_size_mb:.2f} MB)")
@@ -713,7 +713,7 @@ def ingest_gdrive_folder(
             # if file_data:
             #     file_data_for_chunking = file_data # Preparar para chunk/save se OCR retornar texto
             continue # Pular processamento de imagem por agora
-        else:
+                        else:
             logger.info(f"  -> Ignorando tipo de arquivo não suportado/config: {item_path_log} (Tipo: {mime_type})")
             continue # Pula para o próximo item
 
@@ -848,7 +848,7 @@ def ingest_all_gdrive_content(dry_run=False):
 
         except HttpError as error:
             logger.error(f"Erro HTTP ao processar pasta raiz {folder_id}: {error}", exc_info=True)
-        except Exception as e:
+    except Exception as e:
             logger.error(f"Erro inesperado ao processar pasta raiz {folder_id}: {e}", exc_info=True)
         # finally: # <-- Bloco finally removido daqui, limpeza é feita dentro de ingest_gdrive_folder
         #     if temp_dir_path and os.path.exists(temp_dir_path):
