@@ -1,19 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-# Decode Google service account JSON from Base64 and write to file
-if [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64:-}" ]; then
-  echo "ERROR: GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64 is not set" >&2
-  exit 1
-fi
+echo "--- ENTRYPOINT: Trying simple python print --- "
 
-echo "$GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64" | base64 -d > "$GOOGLE_SERVICE_ACCOUNT_JSON"
-echo "--- Credentials written to $GOOGLE_SERVICE_ACCOUNT_JSON ---"
+python3 -c "import sys; print('--- PYTHON: Hello from simple Python! ---', file=sys.stderr)"
 
-# REMOVED JSON normalization step for testing
-# python3 normalize_json.py
+echo "--- ENTRYPOINT: Simple python print finished --- "
 
-echo "--- SKIPPING JSON normalization step ---"
-
-# Execute ETL pipeline
-exec python -m etl.annotate_and_index --source gdrive 
+# exit 0 # Comentado para ver se o container continua ou falha depois 
