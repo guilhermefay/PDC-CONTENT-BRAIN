@@ -400,13 +400,14 @@ def ingest_gdrive_folder(
                     try:
                         # Usar file_id que é o gdrive_id
                         logger.debug(f"  [Check Supabase] Verificando se file_id '{file_id}' existe em 'processed_files'...")
-                        response = supabase_client.table('processed_files')\
+                        # Renomear variável para evitar conflito
+                        supabase_response = supabase_client.table('processed_files')\
                                                 .select('file_id', count='exact')\
                                                 .eq('file_id', file_id)\
                                                 .execute()
 
-                        # Verificar o atributo count da resposta
-                        if response.count > 0:
+                        # Verificar o atributo count da nova variável
+                        if supabase_response.count > 0:
                             logger.info(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) já existe em 'processed_files'. Pulando.")
                             continue # Pula para o próximo arquivo neste loop
                         else:
