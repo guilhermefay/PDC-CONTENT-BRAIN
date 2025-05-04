@@ -506,38 +506,16 @@ def ingest_gdrive_folder(
     service,
     folder_name: str,
     folder_id: str,
-    temp_dir_path: str,
     dry_run: bool = False,
     access_level: Optional[str] = None,
-    current_path: str = "" # Adicionado para log mais claro
-) -> bool: # Modificado: Retorna bool indicando se houve *alguma* falha no salvamento
+    current_path: str = ""
+) -> bool:
     """
     Ingere recursivamente arquivos e pastas de uma pasta do Google Drive.
 
-    Modificado para processamento incremental:
-    - Lista todos os arquivos/pastas na pasta atual.
-    - Itera sobre cada item.
-    - Filtra itens irrelevantes ou já processados.
-    - Para itens relevantes (docs/vídeos):
-        - Obtém o conteúdo (texto/transcrição).
-        - **Chama `split_content_into_chunks`**.
-        - **Chama `_insert_initial_chunks_supabase` para salvar os chunks**.
-        - **Chama `_mark_file_processed_supabase` APÓS sucesso no salvamento**.
-    - Chama a si mesma para subpastas.
-
-    Args:
-        service: Objeto de serviço autenticado do Google Drive.
-        folder_name (str): Nome da pasta atual.
-        folder_id (str): ID da pasta atual do Google Drive.
-        temp_dir_path (str): Diretório temporário para downloads.
-        dry_run (bool): Se True, apenas simula as ações sem baixar/processar/salvar.
-        access_level (Optional[str]): Nível de acesso (apenas para logging).
-        current_path (str): Caminho relativo da pasta (para logging).
-
-    Returns:
-        bool: True se todos os salvamentos de chunks nesta pasta/subpastas foram bem-sucedidos, False caso contrário.
+    Modificado para processamento incremental e sem temp_dir_path explícito.
     """
-    # results = [] # Removido - não vamos mais coletar em lista
+    # results = [] # Removido
     overall_success = True # Flag para rastrear sucesso
 
     # Construir caminho para logging
@@ -546,9 +524,7 @@ def ingest_gdrive_folder(
     logger.info(f"\nIniciando ingestão da pasta: {folder_path_log} (ID: {folder_id}, Access: {access_level})")
 
     page_token = None
-    # items_in_page = 0 # Removido - não precisamos mais
-    # processed_in_folder = 0 # Removido - não precisamos mais
-    all_files_in_folder = [] # Continua necessário para paginação correta
+    all_files_in_folder = []
 
     # 1. Paginação: Coletar todos os itens da pasta primeiro
     while True:
@@ -561,7 +537,6 @@ def ingest_gdrive_folder(
             ).execute()
 
             files_in_current_page = response.get('files', [])
-            # items_in_page = len(files_in_current_page) # Removido
             logger.info(f"  Encontrados {len(files_in_current_page)} itens nesta página para {folder_path_log}...")
             all_files_in_folder.extend(files_in_current_page)
 
@@ -638,10 +613,10 @@ def ingest_gdrive_folder(
             logger.info(f"  Identificada SUBPASTA: {file_name}. Iniciando ingestão recursiva...")
             if not dry_run:
                 # Passar o caminho atual para a chamada recursiva
-                subfolder_success = ingest_gdrive_folder(service, file_name, file_id, temp_dir_path, dry_run, access_level, folder_path_log)
+                subfolder_success = ingest_gdrive_folder(service, file_name, file_id, dry_run, access_level, folder_path_log)
                 if not subfolder_success:
                     overall_success = False # Propagar falha de subpasta
-            continue # Já tratou a pasta, ir para próximo item
+            continue
 
         elif mime_type in DOCUMENT_MIME_TYPES:
             # --- Processar Documento ---
@@ -694,37 +669,36 @@ def ingest_gdrive_folder(
                 logger.debug(f"   -> Baixando arquivo de vídeo (ID: {file_id})...")
                 file_content_bytes = download_file(service, file_id)
                 if file_content_bytes:
-                    # Salvar vídeo temporariamente
-                    temp_video_suffix = os.path.splitext(file_name)[1] or '.mp4' # Usar extensão original ou default
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=temp_video_suffix, dir=temp_dir_path) as temp_video_file:
+                    # Salvar vídeo temporariamente (agora usa tempfile.NamedTemporaryFile sem dir explícito)
+                    temp_video_suffix = os.path.splitext(file_name)[1] or '.mp4'
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=temp_video_suffix) as temp_video_file:
                          temp_video_file.write(file_content_bytes)
                          downloaded_video_path = temp_video_file.name
                     logger.info(f"   -> Vídeo {file_name} baixado para {downloaded_video_path}")
 
-                    # --- Transcrição (Chamar diretamente de video_transcription) ---
+                    # --- Transcrição ---
                     logger.info(f"   -> Iniciando transcrição para {downloaded_video_path}...")
-                    # Precisamos importar process_video
                     from ingestion.video_transcription import process_video
                     transcription_result = process_video(downloaded_video_path)
 
                     if transcription_result and transcription_result.get("transcription"):
                         logger.info(f"   -> Transcrição concluída para {file_name}.")
-                        file_data_for_chunking = { # Preparar dados para chunk/save
+                        file_data_for_chunking = {
                             "content": transcription_result.get("transcription"),
-                            "metadata": create_metadata(item) # Usar metadados originais do GDrive
+                            "metadata": create_metadata(item)
                         }
                     else:
                          logger.warning(f"   -> Falha ou transcrição vazia para {file_name}.")
-                         overall_success = False # Transcrição falhou
+                         overall_success = False
                 else:
                     logger.warning(f"   -> Falha ao baixar vídeo {item_path_log}.")
-                    overall_success = False # Download falhou
+                    overall_success = False
 
             except Exception as video_proc_err:
                  logger.error(f"   -> Erro inesperado ao processar vídeo {item_path_log}: {video_proc_err}", exc_info=True)
-                 overall_success = False # Marcar falha
+                 overall_success = False
             finally:
-                 # Limpar vídeo baixado
+                 # Limpar vídeo baixado (inalterado)
                  if downloaded_video_path and os.path.exists(downloaded_video_path):
                       try:
                           os.remove(downloaded_video_path)
@@ -856,18 +830,12 @@ def ingest_all_gdrive_content(dry_run=False):
             folder_name = folder_metadata.get('name', folder_id)
             logger.info(f"Iniciando processamento da pasta raiz: '{folder_name}' (ID: {folder_id})")
 
-            # Criar diretório temporário para esta pasta raiz
-            # (Gerenciado agora dentro de ingest_gdrive_folder)
-            # temp_dir_path = tempfile.mkdtemp()
-            # logger.info(f"Diretório temporário criado em: {temp_dir_path}")
-
             # Iniciar ingestão recursiva (passando o service)
             # A função ingest_gdrive_folder agora gerencia seu próprio diretório temp
             ingest_successful = ingest_gdrive_folder(
                 service=service, # Passar o service autenticado
                 folder_name=folder_name,
                 folder_id=folder_id,
-                # temp_dir_path=temp_dir_path, # Removido, gerenciado internamente
                 dry_run=dry_run,
                 access_level=None # Determinar acesso se necessário
             )
