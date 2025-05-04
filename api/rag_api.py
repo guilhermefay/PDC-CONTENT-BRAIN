@@ -438,7 +438,7 @@ async def health_check():
     
     if not r2r_client:
         health["status"] = "degraded"
-
+        
     return health
 
 # --- TEMPORARY DEBUG ENDPOINT REMOVED --- 

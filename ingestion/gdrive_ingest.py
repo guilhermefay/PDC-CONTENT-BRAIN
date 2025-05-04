@@ -26,10 +26,31 @@ from docling.document_converter import DocumentConverter
 import tempfile
 from typing import Any, List, Dict, Optional # Adicionado Optional
 from ingestion.image_processor import ImageProcessor  # Import para processamento de imagens
+from supabase import create_client, Client, PostgrestAPIResponse
+from postgrest.exceptions import APIError
 
 # Configurar logger
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Certificar que o logging básico seja configurado apenas uma vez
+if not logger.hasHandlers():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
+
+# Carregar variáveis de ambiente do .env se existir
+load_dotenv()
+
+# Inicializar Cliente Supabase
+supabase_url: str = os.environ.get("SUPABASE_URL")
+supabase_key: str = os.environ.get("SUPABASE_SERVICE_KEY")
+supabase_client: Optional[Client] = None # Inicializar como None
+try:
+    if supabase_url and supabase_key:
+        supabase_client = create_client(supabase_url, supabase_key)
+        logger.info("Cliente Supabase inicializado com sucesso em gdrive_ingest.")
+    else:
+        logger.warning("URL ou Chave Supabase não encontradas nas variáveis de ambiente. Verificação de arquivos processados desabilitada.")
+except Exception as e:
+    logger.error(f"Erro ao inicializar cliente Supabase em gdrive_ingest: {e}", exc_info=True)
+    supabase_client = None # Garantir que seja None em caso de erro
 
 # Constantes
 SUPPORTED_MIME_TYPES = {
@@ -307,7 +328,14 @@ def is_supported_image(file: Dict[str, Any]) -> bool:
         return True
     return False
 
-def ingest_gdrive_folder(service, folder_name: str, folder_id: str, temp_dir_path: str, dry_run: bool = False, access_level: Optional[str] = None) -> List[Dict[str, Any]]:
+def ingest_gdrive_folder(
+    service,
+    folder_name: str,
+    folder_id: str,
+    temp_dir_path: str,
+    dry_run: bool = False,
+    access_level: Optional[str] = None
+) -> List[Dict[str, Any]]:
     """Ingere arquivos de uma pasta específica do Google Drive e suas subpastas.
 
     Lista arquivos na pasta (com paginação), identifica tipos suportados
@@ -332,10 +360,7 @@ def ingest_gdrive_folder(service, folder_name: str, folder_id: str, temp_dir_pat
     logger.info(f"\nIniciando ingestão da pasta: {folder_name} (ID: {folder_id}, Access: {access_level}){ ' (DRY RUN)' if dry_run else ''}")
     ingested_data = []
     page_token = None
-
-    # # Determinação do access_level MOVIDA para o chamador (ingest_all_gdrive_content)
-    # # ou passada recursivamente
-    # logger.info(f"Nível de acesso para pasta {folder_name}: {access_level}")
+    processed_in_this_folder = 0 # Contador para arquivos processados *nesta* chamada
 
     try:
         while True: # Loop de paginação
@@ -366,14 +391,51 @@ def ingest_gdrive_folder(service, folder_name: str, folder_id: str, temp_dir_pat
                 file_id = file.get('id')
                 file_name = file.get('name')
                 mime_type = file.get('mimeType')
-                file_size = file.get('size') 
+                file_size = file.get('size')
 
-                file_data = None 
+                file_data = None
+
+                # ===== Verificar se já foi processado (ANTES de qualquer download/processamento) =====
+                if file_id and supabase_client and mime_type != 'application/vnd.google-apps.folder': # Não verificar pastas
+                    try:
+                        # Usar file_id que é o gdrive_id
+                        logger.debug(f"  [Check Supabase] Verificando se file_id '{file_id}' existe em 'processed_files'...")
+                        response = supabase_client.table('processed_files')\
+                                                .select('file_id', count='exact')\
+                                                .eq('file_id', file_id)\
+                                                .execute()
+
+                        # Verificar o atributo count da resposta
+                        if response.count > 0:
+                            logger.info(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) já existe em 'processed_files'. Pulando.")
+                            continue # Pula para o próximo arquivo neste loop
+                        else:
+                            logger.debug(f"  [Check Supabase] Arquivo '{file_name}' (ID: {file_id}) não encontrado em 'processed_files'. Prosseguindo.")
+
+                    except APIError as api_err:
+                        logger.error(f"  [Check Supabase] Erro API ao verificar {file_name} (ID: {file_id}): {api_err}")
+                        # Decisão: Pular este arquivo se a verificação falhar para evitar reprocessamento acidental?
+                        # Por segurança, vamos pular se não pudermos confirmar que *não* foi processado.
+                        logger.warning(f"  [Check Supabase] Pulando arquivo {file_name} devido a erro na verificação.")
+                        continue
+                    except Exception as e:
+                        logger.error(f"  [Check Supabase] Erro inesperado ao verificar {file_name} (ID: {file_id}): {e}", exc_info=True)
+                        # Pular também em caso de erro inesperado na verificação
+                        logger.warning(f"  [Check Supabase] Pulando arquivo {file_name} devido a erro inesperado na verificação.")
+                        continue
+                elif not file_id:
+                    logger.warning(f"  Arquivo '{file_name}' sem ID encontrado na pasta {folder_name}. Pulando.")
+                    continue
+                elif not supabase_client:
+                    # Apenas logar uma vez se o cliente não estiver disponível?
+                    # Já logado na inicialização, talvez não precise aqui.
+                    pass # Continuar sem verificação se o cliente não foi inicializado
+
+                # ===== Fim da Verificação =====
 
                 # ===== MODIFICAÇÃO AQUI: Tratar Pastas Recursivamente =====
                 if mime_type == 'application/vnd.google-apps.folder':
                     logger.info(f"  Identificada SUBPASTA: {file_name} (ID: {file_id}). Iniciando ingestão recursiva...")
-                    # Chama a função recursivamente para a subpasta, herdando o access_level
                     subfolder_data = ingest_gdrive_folder(
                         service,
                         f"{folder_name}/{file_name}",  # Constrói nome hierárquico
@@ -512,6 +574,7 @@ def ingest_gdrive_folder(service, folder_name: str, folder_id: str, temp_dir_pat
                 # Se o arquivo foi processado (vídeo ou doc), adiciona aos dados
                 if file_data:
                     ingested_data.append(file_data)
+                    processed_in_this_folder += 1
 
             page_token = response.get('nextPageToken', None)
             logger.debug(f"Processamento da página concluído para pasta {folder_name}. Próximo pageToken: {page_token}")
@@ -522,7 +585,7 @@ def ingest_gdrive_folder(service, folder_name: str, folder_id: str, temp_dir_pat
     except Exception as e:
         logger.error(f"Erro inesperado durante a ingestão da pasta {folder_name}: {e}", exc_info=True)
 
-    logger.info(f"Ingestão da pasta {folder_name} e subpastas concluída. Total de itens processados nesta chamada recursiva: {len(ingested_data)}")
+    logger.info(f"Ingestão da pasta {folder_name} e subpastas concluída. Total de itens processados nesta chamada recursiva: {processed_in_this_folder}")
     return ingested_data
 
 def ingest_all_gdrive_content(dry_run=False):
@@ -617,8 +680,6 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Apenas lista os arquivos que seriam processados.')
     parser.add_argument('--output-json', type=str, default='/tmp/gdrive_ingest_summary.json', help='Caminho para salvar o resumo JSON dos arquivos ingeridos.')
     args = parser.parse_args()
-
-    load_dotenv()
 
     logger.info("Iniciando script de ingestão do Google Drive...")
     # logger.info(f"Pastas configuradas: {json.dumps(DRIVE_FOLDER_IDS, indent=2)}") # Removido daqui
