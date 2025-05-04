@@ -40,6 +40,7 @@ COPY . .
 
 # Copy the entrypoint script into the container
 COPY entrypoint.sh .
+COPY normalize_json.py .
 
 # Make port 8000 available (opcional, mas inofensivo)
 EXPOSE 8000
