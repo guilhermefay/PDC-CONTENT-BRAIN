@@ -673,48 +673,31 @@ def run_pipeline(
     # --- Lógica de Busca de Chunks Pendentes no Supabase ---
     all_chunks_to_process = []
     try:
-        logging.info(f"Buscando chunks pendentes para anotação/indexação no Supabase (batch_size={batch_size})...")
-        # Busca chunks com annotation_status = 'pending'
-        response = default_retry(
-            lambda: supabase.table("documents")\
+        logger.info(f"Buscando chunks pendentes para anotação/indexação no Supabase (batch_size={batch_size})...")
+        # REMOVER default_retry e chamar diretamente
+        response = supabase.table("documents")\
             .select("document_id, content, metadata, annotation_status, indexing_status, keep")\
             .eq("annotation_status", "pending")\
             .limit(batch_size)\
             .execute()
-        )
 
+        # Mantém a verificação subsequente
         if response.data:
-            for item in response.data:
-                metadata = item.get('metadata', {})
-                if isinstance(metadata, str):
-                    try:
-                        metadata = json.loads(metadata)
-                    except json.JSONDecodeError:
-                        logging.warning(f"Falha ao decodificar metadata JSON para chunk {item.get('document_id')}. Metadata: {metadata}")
-                        metadata = {}
-                
-                chunk_data = {
-                    "document_id": item.get('document_id'),
-                    "content": item.get('content'),
-                    "metadata": metadata,
-                    "current_annotation_status": item.get('annotation_status'),
-                    "current_indexing_status": item.get('indexing_status'),
-                    "current_keep_status": item.get('keep')
-                }
-                all_chunks_to_process.append(chunk_data)
-            logging.info(f"{len(all_chunks_to_process)} chunks com status 'pending' encontrados para processar.")
+            all_chunks_to_process = response.data
+            logger.info(f"Encontrados {len(all_chunks_to_process)} chunks pendentes no Supabase.")
         else:
-            logging.info("Nenhum chunk com status 'pending' encontrado no Supabase.")
-            end_time_no_chunks = time.time()
-            logging.info(f"Pipeline ETL concluído (sem chunks pendentes) em {end_time_no_chunks - start_time:.2f} segundos.")
-            return
+            logger.info("Nenhum chunk pendente encontrado no Supabase.")
+            # Considerar se o pipeline deve terminar aqui ou esperar/tentar novamente.
+            # Por agora, ele continuará e o loop abaixo não executará.
 
-    except PostgrestAPIError as e_select:
-        logging.error(f"Erro na API do Supabase ao buscar chunks pendentes: {e_select}", exc_info=True)
-        return # Parar se não conseguir buscar
-    except Exception as e_fetch:
-        logging.error(f"Erro inesperado ao buscar chunks pendentes no Supabase: {e_fetch}", exc_info=True)
-        return # Parar se não conseguir buscar
+    except PostgrestAPIError as api_error:
+        logger.error(f"Erro da API Postgrest ao buscar chunks pendentes no Supabase: {api_error}", exc_info=True)
+        # Não continuar se não conseguir buscar chunks
+        return
+    except Exception as e:
+        logger.error(f"Erro inesperado ao buscar chunks pendentes no Supabase: {e}", exc_info=True)
+        # Não continuar se não conseguir buscar chunks
+        return
 
     # --- Processamento em Paralelo dos Chunks (EXISTENTE) ---
     total_chunks = len(all_chunks_to_process)
