@@ -23,18 +23,24 @@ Este script orquestra as seguintes etapas:
 Requer configuração via variáveis de ambiente (ver `.env.sample`).
 """
 
-import sys
+# --- DEBUG LOG INICIO --- 
+import logging
 import os
-
-# Adiciona o diretório raiz do projeto ao PYTHONPATH
-# Isso garante que módulos como 'agents', 'infra', etc., sejam encontrados
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+import sys
+print("--- DEBUG: annotate_and_index.py STARTING ---", file=sys.stderr)
+try:
+    # Adiciona o diretório raiz do projeto ao PYTHONPATH
+    # Isso garante que módulos como 'agents', 'infra', etc., sejam encontrados
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    print(f"--- DEBUG: Project root added to sys.path: {project_root} ---", file=sys.stderr)
+except Exception as e_path:
+    print(f"--- DEBUG: ERROR setting sys.path: {e_path} ---", file=sys.stderr)
+# --- DEBUG LOG FIM --- 
 
 import argparse
 import json
-import logging
 import time
 from datetime import datetime, timezone
 import tiktoken
@@ -56,6 +62,7 @@ from ingestion.video_transcription import process_all_videos_in_directory
 # Mudar level para DEBUG para ver logs mais detalhados
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
 logger = logging.getLogger(__name__) # Definir logger globalmente
+print("--- DEBUG: Logging configured ---", file=sys.stderr) # DEBUG LOG
 
 # Placeholder para conexão com Supabase (será implementado depois)
 # from supabase import create_client, Client
@@ -102,6 +109,10 @@ except Exception as e:
     except Exception as e2:
          logging.error(f"Falha ao carregar qualquer tokenizer tiktoken: {e2}. Contagem de tokens não funcionará.")
          tokenizer = None
+
+# --- DEBUG LOG ANTES DAS FUNÇÕES ---
+print("--- DEBUG: Initializations complete, defining functions... ---", file=sys.stderr)
+# --- DEBUG LOG FIM ---
 
 def count_tokens(text: str) -> int:
     """Conta tokens usando o tokenizer tiktoken inicializado.
@@ -556,6 +567,7 @@ def run_pipeline(
     skip_indexing: bool,
     max_workers_r2r_upload: int = 5
 ):
+    print("--- DEBUG: Entering run_pipeline function --- ", file=sys.stderr) # DEBUG LOG
     """
     Executa o pipeline ETL completo, focado na ingestão do Google Drive.
 
@@ -722,6 +734,7 @@ def run_pipeline(
                     logging.error(f"Erro ao limpar diretório temporário {td}: {cleanup_err}")
 
 def main():
+    print("--- DEBUG: Entering main function --- ", file=sys.stderr) # DEBUG LOG
     """Função principal para executar o pipeline via linha de comando."""
     parser = argparse.ArgumentParser(description="Pipeline ETL para processar e indexar conteúdo PDC do Google Drive.")
     parser.add_argument("--source", type=str, required=True, choices=['gdrive', 'video', 'local'], help="Tipo da fonte de dados (gdrive, video, local)")
@@ -779,4 +792,5 @@ def main():
 
 
 if __name__ == "__main__":
+    print("--- DEBUG: Running under __main__ block --- ", file=sys.stderr) # DEBUG LOG
     main() 
