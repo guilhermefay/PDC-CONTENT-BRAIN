@@ -93,6 +93,8 @@ IGNORED_EXTENSIONS = {
     '.py', '.js', '.ts', '.sql', '.sh', '.ipynb', '.json', '.yml',
     '.yaml', '.log', '.csv', '.tsv', '.xml', '.zip', '.gz', '.tar',
     '.exe', '.dll', '.so', '.class', '.jar', '.md', # Ignorar Markdown por enquanto
+    # Adicionar extensões de imagem comuns
+    '.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp',
     # Adicionar outras extensões se necessário
 }
 # --- Fim Constantes de Filtragem ---
