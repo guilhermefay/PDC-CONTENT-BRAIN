@@ -78,8 +78,7 @@ from agents.annotator_agent import AnnotatorAgent
 # --- Comentado para Debug (terceiros suspeitos) ---
 # from supabase import create_client, Client, PostgrestAPIResponse
 from supabase import create_client, Client, PostgrestAPIResponse
-# from postgrest.exceptions import APIError
-from postgrest.exceptions import APIError
+from postgrest.exceptions import APIError as PostgrestAPIError
 # --- Fim Comentado ---
 from concurrent.futures import ThreadPoolExecutor, as_completed
 # --- Comentado para Debug (locais) ---
@@ -92,6 +91,7 @@ from ingestion.local_ingest import ingest_local_directory
 # from ingestion.video_transcription import process_all_videos_in_directory
 from ingestion.video_transcription import process_all_videos_in_directory
 # --- Fim Comentado ---
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 # Configurar logging GLOBALMENTE
 # Mudar level para DEBUG para ver logs mais detalhados
@@ -148,6 +148,25 @@ except Exception as e:
 # --- DEBUG LOG ANTES DAS FUNÇÕES ---
 print("--- DEBUG: Initializations complete, defining functions... ---", file=sys.stderr)
 # --- DEBUG LOG FIM ---
+
+# --- Configuração de Retentativas Tenacity ---
+
+# Erros comuns de rede/API que podem ser temporários
+RETRYABLE_EXCEPTIONS = (
+    ConnectionError,
+    TimeoutError,
+    PostgrestAPIError, # Erros específicos do Postgrest (usado pelo supabase-py)
+    # Adicionar outros erros específicos de API se necessário (ex: R2RError?)
+)
+
+# Estratégia de retentativa padrão: Tentar 3 vezes, esperar exponencialmente (max 10s)
+default_retry = retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS)
+)
+
+# --- Fim Configuração Tenacity ---
 
 def count_tokens(text: str) -> int:
     """Conta tokens usando o tokenizer tiktoken inicializado.
@@ -331,6 +350,120 @@ def process_local_data(local_files_data: List[Dict[str, Any]]) -> List[Dict[str,
     logger.info(f"Processando {len(local_files_data)} arquivos locais (nenhuma transformação extra aplicada).")
     return local_files_data
 
+@default_retry
+def _update_chunk_status_supabase(supabase_client: Client, document_id: str, data_to_update: Dict[str, Any], step_name: str):
+    """Função auxiliar para atualizar o status de um chunk no Supabase (com retentativas)."""
+    if not supabase_client or not document_id:
+        return False
+    
+    logger.debug(f"[Supabase Update - {step_name}] Tentando atualizar status para doc_id {document_id}")
+    try:
+        response = supabase_client.table('documents')\
+                                  .update(data_to_update)\
+                                  .eq('document_id', document_id)\
+                                  .execute()
+        if hasattr(response, 'error') and response.error:
+             # Se ainda der erro após retentativas, logar como erro final
+             logger.error(f"[Supabase Update - {step_name}] Erro FINAL ao atualizar status para doc_id {document_id} após retentativas: {response.error}")
+             return False
+        logger.debug(f"[Supabase Update - {step_name}] Status atualizado para doc_id {document_id}")
+        return True
+    except (PostgrestAPIError) as e:
+        # Logar erro específico da API que causou a falha final das retentativas
+        logger.error(f"[Supabase Update - {step_name}] Erro FINAL API ao atualizar status para doc_id {document_id} após retentativas: {e}")
+        raise # Re-lançar para que tenacity saiba que falhou
+    except Exception as e:
+        logger.error(f"[Supabase Update - {step_name}] Erro FINAL inesperado ao atualizar status para doc_id {document_id} após retentativas: {e}", exc_info=True)
+        raise # Re-lançar para que tenacity saiba que falhou
+
+@default_retry
+def _insert_initial_chunks_supabase(supabase_client: Client, batch: List[Dict[str, Any]], source_name: str) -> bool:
+    """Insere o lote inicial de chunks no Supabase (com retentativas)."""
+    if not supabase_client or not batch:
+        logger.warning(f"[Supabase Insert Initial] Cliente não disponível ou lote vazio para {source_name}. Pulando inserção.")
+        return False # Ou True se lote vazio for considerado sucesso? False parece mais seguro.
+
+    logger.info(f"[Supabase Insert Initial] Tentando inserir {len(batch)} chunks em lote inicial para {source_name}...")
+    start_initial_insert = time.time()
+    try:
+        # Aplicar retry aqui na chamada
+        response: PostgrestAPIResponse = default_retry(supabase_client.table('documents').insert(batch).execute)()
+        initial_insert_time = time.time() - start_initial_insert
+        if response.data or (hasattr(response, 'status_code') and 200 <= response.status_code < 300):
+            logging.info(f"[Supabase Insert Initial] Inserção inicial bem-sucedida para {source_name} em {initial_insert_time:.2f} segundos.")
+            return True
+        else:
+             logger.error(f"[Supabase Insert Initial] Falha FINAL na inserção inicial para {source_name} após retentativas. Resposta: {getattr(response, 'data', 'N/A')}, Status: {getattr(response, 'status_code', 'N/A')}")
+             return False
+    except (PostgrestAPIError) as e:
+        logger.error(f"[Supabase Insert Initial] Erro FINAL API na inserção inicial para {source_name} após retentativas: {e}", exc_info=True)
+        return False # Falha crítica
+    except Exception as general_exception:
+        logger.error(f"[Supabase Insert Initial] Erro FINAL inesperado na inserção inicial para {source_name} após retentativas", exc_info=True)
+        return False # Falha crítica
+
+@default_retry
+def _run_annotator_with_retry(annotator: AnnotatorAgent, chunks: List[Dict[str, Any]], source_name: str) -> List[Dict[str, Any]]:
+    """Executa o annotator com retentativas."""
+    logger.info(f"[Anotação Retry] Tentando executar anotação para {len(chunks)} chunks de {source_name}...")
+    start_time = time.time()
+    try:
+        result = annotator.run(chunks)
+        duration = time.time() - start_time
+        logger.info(f"[Anotação Retry] Execução bem-sucedida em {duration:.2f}s.")
+        return result
+    except Exception as e:
+         # Logar o erro que causou a falha final das retentativas
+         logger.error(f"[Anotação Retry] Erro FINAL ao executar anotação para {source_name} após retentativas: {e}", exc_info=True)
+         raise # Re-lançar para tenacity
+
+@default_retry
+def _upload_single_chunk_to_r2r_with_retry(r2r_client: R2RClientWrapper, file_path: str, document_id: str, metadata: Dict[str, Any]):
+    """Faz upload para R2R com retentativas."""
+    logger.debug(f"[R2R Upload Retry] Tentando upload para doc_id: {document_id}")
+    try:
+        result = r2r_client.upload_file(
+            file_path=file_path,
+            document_id=document_id,
+            metadata=metadata
+        )
+        logger.debug(f"[R2R Upload Retry] Resultado para doc_id {document_id}: {result}")
+        return result # Retorna o dicionário de resultado
+    except Exception as e:
+         logger.error(f"[R2R Upload Retry] Erro FINAL no upload para doc_id {document_id} após retentativas: {e}", exc_info=False)
+         raise # Re-lançar
+
+@default_retry
+def _mark_file_processed_supabase(supabase_client: Client, file_id: str, source_name: str):
+    """Marca o arquivo como processado no Supabase (com retentativas)."""
+    if not supabase_client or not file_id:
+        return
+
+    logger.info(f"[Mark Processed Retry] Tentando marcar {source_name} (ID: {file_id}) como processado...")
+    try:
+        response = supabase_client.table('processed_files').insert({"file_id": file_id}).execute()
+        if response.data or (hasattr(response, 'status_code') and 200 <= response.status_code < 300):
+             logging.info(f"[Mark Processed Retry] Marcação bem-sucedida para {file_id}.")
+        else:
+             is_duplicate = False
+             if hasattr(response, 'error') and response.error:
+                  if hasattr(response.error, 'code') and response.error.code == '23505':
+                       is_duplicate = True
+                       logging.info(f"[Mark Processed Retry] {file_id} já estava marcado (Unique constraint). OK.")
+             if not is_duplicate:
+                  logger.error(f"[Mark Processed Retry] Falha FINAL ao marcar {file_id} após retentativas. Resposta: {getattr(response, 'data', 'N/A')}, Status: {getattr(response, 'status_code', 'N/A')}, Erro: {getattr(response, 'error', 'N/A')}")
+                  # Levantar exceção aqui para sinalizar falha? Ou apenas logar? Por enquanto, logar.
+                  # raise PostgrestAPIError("Failed to mark file as processed after retries") # Exemplo se quiséssemos falhar
+    except (PostgrestAPIError) as e:
+         if hasattr(e, 'code') and e.code == '23505':
+              logger.info(f"[Mark Processed Retry] {file_id} já estava marcado (Unique constraint - APIError). OK.")
+         else:
+              logger.error(f"[Mark Processed Retry] Erro FINAL API ao marcar {file_id} após retentativas: {e}")
+              # raise # Re-lançar se quisermos que a falha aqui seja crítica
+    except Exception as e:
+        logger.error(f"[Mark Processed Retry] Erro FINAL inesperado ao marcar {file_id} após retentativas: {e}", exc_info=True)
+        # raise # Re-lançar se quisermos que a falha aqui seja crítica
+
 def process_single_source_document(
     source_data: Dict[str, Any],
     annotator: AnnotatorAgent,
@@ -347,10 +480,12 @@ def process_single_source_document(
     para um único item de dados de entrada:
     1. Verifica no Supabase se o `file_id` (nos metadados) já foi processado.
     2. Se não processado, divide o conteúdo em chunks.
-    3. (Opcional) Envia os chunks para o `AnnotatorAgent`.
-    4. Armazena todos os chunks (com resultados da anotação) no Supabase.
-    5. (Opcional) Envia os chunks marcados como `keep=True` para o R2R para indexação.
-    6. Se o armazenamento/indexação for bem-sucedido, marca o `file_id` como processado no Supabase.
+    3. **Salva TODOS os chunks no Supabase com status inicial 'pending'.**
+    4. (Opcional) Envia os chunks para o `AnnotatorAgent`.
+    5. **(Refatorar em 40.3) Atualiza o status da anotação no Supabase.**
+    6. (Opcional) Envia os chunks marcados como `keep=True` para o R2R para indexação.
+    7. **(Refatorar em 40.3) Atualiza o status da indexação no Supabase.**
+    8. Se o processamento geral do arquivo for bem-sucedido, marca o `file_id` como processado no Supabase.
 
     Args:
         source_data (Dict[str, Any]): Dicionário contendo 'content' e 'metadata' da fonte.
@@ -386,7 +521,7 @@ def process_single_source_document(
                 return 0 # Retornar 0 chunks para indicar que foi pulado
             else:
                 logging.debug(f"[Check Processed] Arquivo {source_name} (ID: {source_id}) não processado anteriormente.")
-        except APIError as e:
+        except PostgrestAPIError as e:
             logging.error(f"[Check Processed] Erro API ao verificar status para {source_id} no Supabase: {e}")
             # Logar detalhes extras se possível
             if hasattr(e, 'json') and callable(e.json):
@@ -400,7 +535,7 @@ def process_single_source_document(
 
     if not source_content:
         logging.warning(f"Conteúdo vazio para {source_name}. Pulando.")
-        return None
+        return 0 # Não é um erro, apenas nada a fazer.
 
     logging.info(f"[Chunking] Iniciando para {source_name}...")
     start_chunking = time.time()
@@ -412,186 +547,292 @@ def process_single_source_document(
         logging.warning(f"Nenhum chunk criado para {source_name}. Pulando etapas subsequentes.")
         return 0
 
-    # --- Anotação --- 
-    processed_chunks = [] # Lista completa de chunks com dados de anotação
+    # --- Salvar Chunks Primeiro (com retentativas) ---
+    initial_supabase_batch = []
+    if supabase_client:
+        logging.info(f"[Supabase Insert] Preparando {len(all_chunks)} chunks para inserção inicial...")
+        start_prep_insert = time.time()
+        for chunk in all_chunks:
+            # Gerar e adicionar document_id (UUID) a cada chunk ANTES de salvar
+            doc_id = str(uuid.uuid4())
+            chunk["document_id"] = doc_id # Adiciona ao dicionário do chunk para uso posterior
+
+            supabase_data = {
+                "document_id": doc_id,
+                "content": chunk.get("content"),
+                "metadata": chunk.get("metadata"),
+                "token_count": count_tokens(chunk.get("content", "")),
+                # Adicionar status iniciais
+                "annotation_status": "pending",
+                "indexing_status": "pending",
+                # Não definir annotation_tags, annotation_keep, etc. aqui
+            }
+            initial_supabase_batch.append(supabase_data)
+
+        prep_insert_time = time.time() - start_prep_insert
+        logging.debug(f"[Supabase Insert] Preparação do lote inicial levou {prep_insert_time:.2f}s")
+
+        if initial_supabase_batch:
+            # Chamar a função com retentativas
+            insert_ok = _insert_initial_chunks_supabase(supabase_client, initial_supabase_batch, source_name)
+            if not insert_ok:
+                 return None # Erro crítico, não continuar
+
+    elif not skip_indexing: # Se skip_indexing=False mas não temos cliente Supabase
+         logging.error(f"Supabase client não está disponível, mas skip_indexing é False. Impossível prosseguir com armazenamento/status. Pulando {source_name}.")
+         return None # Erro de configuração/estado
+
+    # --- Anotação (com retentativas) ---
+    processed_chunks = []
+    annotation_succeeded = True
+    current_time_utc = datetime.now(timezone.utc)
+
     if skip_annotation:
         logging.info(f"[Anotação] Pulando para {source_name} conforme solicitado.")
-        processed_chunks = [{**chunk, 'keep': True, 'tags': ['interno', 'tecnico'], 'reason': 'Anotação pulada via flag'} for chunk in all_chunks]
+        processed_chunks = [{**chunk, 'tags': [], 'keep': True, 'reason': 'Annotation Skipped'} for chunk in all_chunks]
+        # Atualizar status no Supabase para 'skipped'
+        for chunk in processed_chunks:
+            _update_chunk_status_supabase(
+                supabase_client,
+                chunk.get("document_id"),
+                {"annotation_status": "skipped", "annotated_at": current_time_utc.isoformat()},
+                "Annotation Skip"
+            )
+        annotation_succeeded = True # Pular é considerado um 'sucesso' para o fluxo
+    elif not annotator:
+         logging.warning(f"AnnotatorAgent não disponível. Pulando anotação para {source_name}.")
+         processed_chunks = [{**chunk, 'tags': [], 'keep': True, 'reason': 'Annotator Not Available'} for chunk in all_chunks]
+         # Atualizar status no Supabase para 'skipped' ou 'failed'? Usar 'skipped'
+         for chunk in processed_chunks:
+              _update_chunk_status_supabase(
+                supabase_client,
+                chunk.get("document_id"),
+                {"annotation_status": "skipped", "annotated_at": current_time_utc.isoformat()},
+                "Annotation Skip (No Agent)"
+            )
+         annotation_succeeded = True
     else:
         logging.info(f"[Anotação] Iniciando para {len(all_chunks)} chunks de {source_name}...")
-        start_annotation = time.time()
         try:
-            processed_chunks = annotator.run(all_chunks)
+            # Chamar a função com retentativas
+            annotated_chunks_results = _run_annotator_with_retry(annotator, all_chunks, source_name)
             annotation_time = time.time() - start_annotation
-            logging.info(f"[Anotação] Concluída para {source_name} em {annotation_time:.2f} segundos. {len(processed_chunks)} chunks processados pela anotação.")
-        except Exception as e:
-            logging.error(f"Erro durante a execução do AnnotatorAgent para {source_name}: {e}", exc_info=True)
-            processed_chunks = [{**chunk, 'keep': False, 'tags': [], 'reason': f'Falha na anotação: {e}'} for chunk in all_chunks]
+            logging.info(f"[Anotação] Concluída para {source_name} em {annotation_time:.2f} segundos. {len(annotated_chunks_results)} chunks processados pela anotação.")
+            processed_chunks = annotated_chunks_results
 
-    # --- Armazenamento/Indexação --- 
-    chunks_sent_to_r2r_count = 0
-    storage_successful = False # Flag para saber se armazenamento/indexação foi bem sucedido
-    if skip_indexing:
-        logging.info(f"[Armazenamento/Indexação] Pulando para {source_name} conforme solicitado.")
-        return 0
-    elif not processed_chunks:
-         logging.info(f"[Armazenamento/Indexação] Nenhum chunk processado pela anotação para {source_name}. Pulando.")
-         return 0
-    else:
-        logging.info(f"[Armazenamento/Indexação] Iniciando para {len(processed_chunks)} chunks de {source_name}...")
-        start_storage = time.time()
-
-        supabase_batch_data = []
-        r2r_upload_tasks = [] 
-        for chunk in processed_chunks:
-            doc_id = chunk.get("document_id", str(uuid.uuid4()))
-            chunk["document_id"] = doc_id 
-            if supabase_client:
-                supabase_data = {
-                    "document_id": doc_id,
-                    "content": chunk.get("content"),
-                    "metadata": chunk.get("metadata"),
+            # Atualizar Supabase com resultados da anotação (sucesso)
+            update_annotation_success_count = 0
+            current_time_utc = datetime.now(timezone.utc) # Atualizar timestamp
+            for chunk in processed_chunks:
+                update_payload = {
+                    "annotation_status": "success",
+                    "annotated_at": current_time_utc.isoformat(),
                     "annotation_tags": chunk.get("tags"),
-                    "annotation_keep": chunk.get("keep", False),
-                    "annotation_reason": chunk.get("reason", ""),
-                    "token_count": count_tokens(chunk.get("content", ""))
+                    "annotation_keep": chunk.get("keep"),
+                    "annotation_reason": chunk.get("reason")
                 }
-                supabase_batch_data.append(supabase_data)
-            if r2r_client_instance and chunk.get("keep"):
-                r2r_upload_tasks.append((chunk, doc_id))
+                if _update_chunk_status_supabase(supabase_client, chunk.get("document_id"), update_payload, "Annotation Success"):
+                    update_annotation_success_count += 1
+            logging.info(f"[Supabase Update - Annotation Success] {update_annotation_success_count}/{len(processed_chunks)} chunks atualizados.")
+            annotation_succeeded = True
 
-        supabase_insert_ok = False
-        if supabase_client and supabase_batch_data:
-            logging.info(f"[Supabase] Tentando inserir {len(supabase_batch_data)} chunks em lote para {source_name}...")
-            try:
-                response: PostgrestAPIResponse = supabase_client.table('documents').insert(supabase_batch_data).execute()
-                if response.data or (hasattr(response, 'status_code') and 200 <= response.status_code < 300):
-                    logging.info(f"[Supabase] Inserção em lote bem-sucedida para {source_name}.")
-                    supabase_insert_ok = True
-                else:
-                     logger.error(f"[Supabase] Inserção em lote pode ter falhado para {source_name}. Resposta: {getattr(response, 'data', 'N/A')}, Status: {getattr(response, 'status_code', 'N/A')}")
-            except APIError as e:
-                logger.error(f"[Supabase] Erro API na inserção em lote para {source_name}: {e}", exc_info=True)
-                if hasattr(e, 'json') and callable(e.json):
-                    try: logger.error(f"  - JSON do Erro: {e.json()}")
-                    except Exception: pass
-            except Exception as general_exception:
-                logger.error(f"[Supabase] Erro inesperado na inserção em lote para {source_name}", exc_info=True)
-
-        r2r_upload_ok = False
-        if r2r_client_instance and r2r_upload_tasks:
-            logging.info(f"[R2R] Iniciando upload paralelo de {len(r2r_upload_tasks)} chunks aprovados para {source_name}...")
+        except Exception as e: # Captura exceção final após retentativas
+            logging.error(f"Erro FINAL durante a execução do AnnotatorAgent para {source_name} APÓS retentativas: {e}", exc_info=False) # Log mais conciso
+            processed_chunks = [{**chunk, 'tags': [], 'keep': False, 'reason': f'Annotation Failed after retries: {e}'} for chunk in all_chunks]
+            annotation_succeeded = False
             
+            # Atualizar Supabase com status de falha na anotação
+            update_annotation_fail_count = 0
+            current_time_utc = datetime.now(timezone.utc) # Atualizar timestamp
+            for chunk in processed_chunks: # Usar processed_chunks aqui contém a razão da falha
+                 update_payload = {
+                    "annotation_status": "failed",
+                    "annotated_at": current_time_utc.isoformat(),
+                    "annotation_reason": chunk.get("reason") # Salvar a razão da falha
+                 }
+                 if _update_chunk_status_supabase(supabase_client, chunk.get("document_id"), update_payload, "Annotation Failure"):
+                     update_annotation_fail_count += 1
+            logging.warning(f"[Supabase Update - Annotation Failure] {update_annotation_fail_count}/{len(processed_chunks)} chunks marcados como falha na anotação.")
+
+
+    # --- Indexação R2R (com retentativas no upload) ---
+    chunks_sent_to_r2r_count = 0
+    # Determinar sucesso geral do arquivo (storage_successful) apenas no final
+    # Usar uma flag específica para o sucesso da indexação
+    indexing_step_completed_without_errors = True # Assume sucesso até que falhe
+
+    if skip_indexing:
+        logging.info(f"[Indexação R2R] Pulando para {source_name} conforme solicitado.")
+        # Atualizar status de indexação para 'skipped' para todos os chunks
+        update_indexing_skip_count = 0
+        current_time_utc = datetime.now(timezone.utc)
+        for chunk in processed_chunks: # Iterar sobre chunks após anotação
+            if _update_chunk_status_supabase(
+                supabase_client,
+                chunk.get("document_id"),
+                {"indexing_status": "skipped", "indexed_at": current_time_utc.isoformat()},
+                "Indexing Skip"
+            ):
+                update_indexing_skip_count += 1
+        logging.info(f"[Supabase Update - Indexing Skip] {update_indexing_skip_count}/{len(processed_chunks)} chunks marcados como indexação pulada.")
+        indexing_step_completed_without_errors = True # Pular é considerado sucesso
+
+    elif not r2r_client_instance:
+         logging.warning(f"[Indexação R2R] Cliente R2R não disponível. Pulando indexação para {source_name}.")
+         # Atualizar status de indexação para 'skipped'
+         update_indexing_skip_count = 0
+         current_time_utc = datetime.now(timezone.utc)
+         for chunk in processed_chunks:
+              if _update_chunk_status_supabase(
+                    supabase_client,
+                    chunk.get("document_id"),
+                    {"indexing_status": "skipped", "indexed_at": current_time_utc.isoformat()},
+                    "Indexing Skip (No Client)"
+                ):
+                   update_indexing_skip_count += 1
+         logging.info(f"[Supabase Update - Indexing Skip] {update_indexing_skip_count}/{len(processed_chunks)} chunks marcados como indexação pulada (sem cliente R2R).")
+         indexing_step_completed_without_errors = True
+
+    elif not processed_chunks or not annotation_succeeded: # Se anotação falhou, não indexar
+         logging.warning(f"[Indexação R2R] Pulando indexação para {source_name} devido à falha na etapa de anotação ou falta de chunks processados.")
+         # Atualizar status de indexação para 'skipped' (pois não foi tentado devido a erro anterior)
+         update_indexing_skip_count = 0
+         current_time_utc = datetime.now(timezone.utc)
+         for chunk in processed_chunks:
+              if _update_chunk_status_supabase(
+                    supabase_client,
+                    chunk.get("document_id"),
+                    {"indexing_status": "skipped", "indexed_at": current_time_utc.isoformat()},
+                    "Indexing Skip (Annotation Failed)"
+                ):
+                   update_indexing_skip_count += 1
+         logging.info(f"[Supabase Update - Indexing Skip] {update_indexing_skip_count}/{len(processed_chunks)} chunks marcados como indexação pulada (falha anotação).")
+         # Mantem indexing_step_completed_without_errors = True, pois a *etapa de indexação* em si não falhou
+    
+    else: # Prosseguir com a indexação
+        r2r_upload_tasks = [] 
+        chunks_to_skip_indexing = [] # Chunks com keep=False
+        for chunk in processed_chunks:
+            if chunk.get("keep"): 
+                doc_id = chunk.get("document_id")
+                if doc_id:
+                    r2r_upload_tasks.append((chunk, doc_id))
+                else:
+                    logging.error(f"[Indexação R2R] Chunk sem document_id encontrado para {source_name}. Pulando.")
+            else:
+                 chunks_to_skip_indexing.append(chunk.get("document_id")) # Coleta IDs dos chunks a serem pulados
+
+        # Marcar chunks com keep=False como 'skipped' no Supabase
+        update_indexing_keepfalse_count = 0
+        current_time_utc = datetime.now(timezone.utc)
+        for doc_id_to_skip in chunks_to_skip_indexing:
+             if _update_chunk_status_supabase(
+                   supabase_client,
+                   doc_id_to_skip,
+                   {"indexing_status": "skipped", "indexed_at": current_time_utc.isoformat()},
+                   "Indexing Skip (Keep=False)"
+               ):
+                  update_indexing_keepfalse_count += 1
+        if update_indexing_keepfalse_count > 0:
+             logging.info(f"[Supabase Update - Indexing Skip] {update_indexing_keepfalse_count} chunks marcados como indexação pulada (keep=False).")
+
+
+        if not r2r_upload_tasks:
+            logging.info(f"[Indexação R2R] Nenhum chunk marcado para envio ao R2R para {source_name}.")
+            # Não precisa atualizar status aqui, já feito acima para keep=False
+            indexing_step_completed_without_errors = True
+        else:
+            logging.info(f"[Indexação R2R] Iniciando upload paralelo de {len(r2r_upload_tasks)} chunks para {source_name}...")
+            start_indexing = time.time()
+
+            # Função auxiliar interna AGORA chama a função com retentativas
             def upload_single_chunk_to_r2r(chunk_data, doc_id):
-                """Função auxiliar para rodar em threads."""
-                chunk_content = chunk_data.get("content")
-                chunk_metadata = chunk_data.get("metadata", {})
-                annotation_tags = chunk_data.get("tags", [])
-                annotation_reason = chunk_data.get("reason", "")
-                chunk_index = chunk_metadata.get("chunk_index", -1)
-                temp_file_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".txt", encoding='utf-8') as temp_file:
-                        temp_file.write(chunk_content)
-                        temp_file_path = temp_file.name
+                 chunk_metadata = chunk_data.get("metadata", {})
+                 chunk_index = chunk_metadata.get("chunk_index", -1) # Log purpose
+                 temp_file_path = None
+                 try:
+                     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".txt", encoding='utf-8') as temp_file:
+                         temp_file.write(chunk_data.get("content")) # Obter conteúdo aqui
+                         temp_file_path = temp_file.name
+                         # ... (preparar r2r_metadata) ...
+                         r2r_metadata = chunk_metadata.copy()
+                         r2r_metadata['tags'] = [str(tag) for tag in chunk_data.get("tags", []) if isinstance(tag, str)]
+                         r2r_metadata['reason'] = chunk_data.get("reason", "")
+                         r2r_metadata['token_count'] = count_tokens(chunk_data.get("content", ""))
+                         r2r_metadata.pop('test_marker', None)
+                         
+                         # Chamar a função com retentativas
+                         upload_result = _upload_single_chunk_to_r2r_with_retry(
+                             r2r_client_instance, temp_file_path, doc_id, r2r_metadata
+                         )
+                         upload_success = upload_result.get("success", False)
+                         error_message = upload_result.get("error")
+                         return {"doc_id": doc_id, "success": upload_success, "error": error_message}
 
-                    # *** REVERTIDO: Preparar metadados COMPLETOS para R2R ***
-                    r2r_metadata = chunk_metadata.copy()
-                    # Garantir que 'tags' seja uma lista de strings
-                    r2r_metadata['tags'] = [str(tag) for tag in annotation_tags if isinstance(tag, str)]
-                    r2r_metadata['reason'] = annotation_reason
-                    # Adicionar outros metadados úteis se necessário
-                    r2r_metadata['token_count'] = count_tokens(chunk_content)
-                    # Remover marcador de teste, se existir
-                    r2r_metadata.pop('test_marker', None)
-                    logger.debug(f"[R2R Upload Thread] Usando metadados completos: {r2r_metadata}")
-
-                    upload_result = r2r_client_instance.upload_file(
-                        file_path=temp_file_path,
-                        document_id=doc_id,
-                        metadata=r2r_metadata
-                    )
-                    return upload_result # Retorna o dicionário de resultado
-                except Exception as e:
-                    logger.error(f"[R2R Upload Thread] Erro para chunk {chunk_index} de {source_name}: {e}", exc_info=False) # Log simplificado em thread
-                    return {"success": False, "error": str(e)}
-                finally:
-                    # Garantir limpeza do arquivo temporário
-                    if temp_file_path and os.path.exists(temp_file_path):
-                        try: os.remove(temp_file_path)
-                        except Exception: pass
-
-            # Usar ThreadPoolExecutor para paralelizar uploads R2R
-            successful_r2r_uploads = 0
+                 except Exception as e: # Captura falha final da retentativa ou erro na preparação
+                      logger.error(f"[R2R Upload Main Thread] Erro FINAL para doc_id: {doc_id} (chunk {chunk_index}): {e}", exc_info=False)
+                      return {"doc_id": doc_id, "success": False, "error": str(e)}
+                 finally:
+                      if temp_file_path and os.path.exists(temp_file_path):
+                          try: os.remove(temp_file_path)
+                          except Exception: pass
+            
+            # Coletar resultados
+            r2r_results = []
             with ThreadPoolExecutor(max_workers=max_workers_r2r_upload) as executor:
-                future_to_chunk = {executor.submit(upload_single_chunk_to_r2r, chunk, doc_id): chunk for chunk, doc_id in r2r_upload_tasks}
-                
-                for future in as_completed(future_to_chunk):
-                    chunk_info = future_to_chunk[future]
-                    chunk_idx_log = chunk_info.get("metadata", {}).get("chunk_index", "?")
+                future_to_doc_id = {executor.submit(upload_single_chunk_to_r2r, chunk, doc_id): doc_id for chunk, doc_id in r2r_upload_tasks}
+                for future in as_completed(future_to_doc_id):
+                    doc_id_completed = future_to_doc_id[future]
                     try:
                         result_dict = future.result()
-                        if result_dict and result_dict.get("success"):
-                            successful_r2r_uploads += 1
-                            logger.debug(f"[R2R Upload Thread] Sucesso para chunk {chunk_idx_log} de {source_name}.")
-                        else:
-                            logger.warning(f"[R2R Upload Thread] Falha para chunk {chunk_idx_log} de {source_name}. Erro: {result_dict.get('error')}")
+                        r2r_results.append(result_dict)
                     except Exception as exc:
-                        logger.error(f"[R2R Upload Thread] Exceção ao obter resultado para chunk {chunk_idx_log} de {source_name}: {exc}")
+                        logging.error(f'[R2R Upload Main] Upload para doc_id {doc_id_completed} gerou exceção: {exc}', exc_info=True)
+                        r2r_results.append({"doc_id": doc_id_completed, "success": False, "error": str(exc)})
             
+            indexing_time = time.time() - start_indexing
+            successful_r2r_uploads = sum(1 for r in r2r_results if r.get("success"))
+            failed_r2r_uploads = len(r2r_results) - successful_r2r_uploads
             chunks_sent_to_r2r_count = successful_r2r_uploads
-            logging.info(f"[R2R] Upload paralelo concluído para {source_name}. {chunks_sent_to_r2r_count}/{len(r2r_upload_tasks)} chunks enviados com sucesso.")
-            # Considerar sucesso se pelo menos alguns chunks foram enviados?
-            # Por enquanto, sucesso se não houver tarefas ou se alguma foi bem-sucedida.
-            if not r2r_upload_tasks or chunks_sent_to_r2r_count > 0:
-                 r2r_upload_ok = True
-            # Se houveram tarefas mas NENHUMA foi bem-sucedida, considerar falha.
-            elif r2r_upload_tasks and chunks_sent_to_r2r_count == 0:
-                 r2r_upload_ok = False 
-        elif not r2r_upload_tasks: # Se não havia chunks para enviar ao R2R
-             r2r_upload_ok = True # Considerar sucesso para o passo R2R
+            logging.info(f"[Indexação R2R] Concluída para {source_name} em {indexing_time:.2f}s. {successful_r2r_uploads} S, {failed_r2r_uploads} F.")
 
-        storage_time = time.time() - start_storage
-        logging.info(f"[Armazenamento/Indexação] Concluído para {source_name} em {storage_time:.2f} segundos. {len(supabase_batch_data)} chunks armazenados no Supabase. {chunks_sent_to_r2r_count} chunks enviados para R2R.")
-        
-        # Condição de sucesso geral do armazenamento/indexação
-        # Sucesso se a inserção no Supabase ocorreu E o upload R2R (se aplicável) ocorreu.
-        if supabase_insert_ok and r2r_upload_ok:
-             storage_successful = True
+            # Atualizar Supabase com resultados de R2R
+            update_indexing_count = 0
+            current_time_utc = datetime.now(timezone.utc)
+            for result in r2r_results:
+                doc_id_to_update = result.get("doc_id")
+                is_success = result.get("success")
+                status_to_set = "success" if is_success else "failed"
+                update_payload = {
+                    "indexing_status": status_to_set,
+                    "indexed_at": current_time_utc.isoformat()
+                    # Poderia adicionar a msg de erro em metadata se falhou?
+                }
+                if _update_chunk_status_supabase(supabase_client, doc_id_to_update, update_payload, "Indexing Result"):
+                    update_indexing_count += 1
+            logging.info(f"[Supabase Update - Indexing Result] {update_indexing_count}/{len(r2r_results)} chunks tiveram status de indexação atualizado.")
 
-        # --- Adicionado: Marcar como processado APÓS sucesso --- 
-        if storage_successful and supabase_client and source_id:
-            logging.debug(f"[Mark Processed] Marcando {source_name} (ID: {source_id}) como processado...")
-            try:
-                # Usar upsert para criar ou atualizar o registro
-                response = supabase_client.table('processed_files').upsert({
-                    'file_id': source_id,
-                    'status': 'processed',
-                    'source': initial_metadata.get('origin', 'unknown'),
-                    'last_processed_at': datetime.now(timezone.utc).isoformat()
-                }).execute()
-                # Verificar resposta do upsert
-                if hasattr(response, 'data') and response.data:
-                     logging.debug(f"[Mark Processed] Marcação (upsert) bem-sucedida para {source_id}.")
-                elif hasattr(response, 'status_code') and 200 <= response.status_code < 300:
-                     # Status code OK também indica sucesso, mesmo sem 'data' explícito no retorno upsert simples
-                     logging.debug(f"[Mark Processed] Marcação (upsert) retornou status OK para {source_id}.")
-                else:
-                     logger.warning(f"[Mark Processed] Resposta inesperada do upsert para {source_id}: Status {getattr(response, 'status_code', 'N/A')}, Data: {getattr(response, 'data', 'N/A')}")
+            # Determinar sucesso da etapa de indexação
+            if failed_r2r_uploads > 0:
+                 indexing_step_completed_without_errors = False
+                 logging.warning(f"[Indexação R2R] {failed_r2r_uploads} falhas ocorreram durante o upload para {source_name}.")
+            else:
+                 indexing_step_completed_without_errors = True
 
-            except APIError as e:
-                logging.error(f"[Mark Processed] Erro API ao marcar {source_id} como processado: {e}")
-                if hasattr(e, 'json') and callable(e.json):
-                    try: logger.error(f"  - JSON do Erro: {e.json()}")
-                    except Exception: pass
-            except Exception as e:
-                logging.error(f"[Mark Processed] Erro inesperado ao marcar {source_id} como processado: {e}", exc_info=True)
-        elif not storage_successful:
-             logging.warning(f"[Mark Processed] Pulando marcação para {source_name} (ID: {source_id}) devido a falha no armazenamento/indexação.")
-        # --- Fim Adicionado --- 
+    # --- Marcar Arquivo como Processado (com retentativas) ---
+    processamento_geral_ok = annotation_succeeded and indexing_step_completed_without_errors
+    if source_id and supabase_client and processamento_geral_ok:
+         # Chamar a função com retentativas
+         try:
+              _mark_file_processed_supabase(supabase_client, source_id, source_name)
+         except Exception as mark_exc:
+             # Logar que a marcação final falhou, mas não necessariamente falhar o processo inteiro
+             logger.error(f"Falha ao marcar {source_name} (ID: {source_id}) como processado, mesmo após retentativas: {mark_exc}", exc_info=True)
 
-    # Retorna o número de chunks enviados para R2R se o armazenamento/indexação foi bem sucedido
-    return chunks_sent_to_r2r_count if storage_successful else None
+    # Retorna a contagem de uploads R2R bem-sucedidos
+    # ou None se ocorreu erro crítico na inserção inicial.
+    # Se anotação ou indexação falharam mas inserção inicial foi ok, ainda retorna a contagem.
+    return chunks_sent_to_r2r_count
 
 def run_pipeline(
     source: str,
@@ -600,232 +841,162 @@ def run_pipeline(
     dry_run_limit: Optional[int],
     skip_annotation: bool,
     skip_indexing: bool,
-    max_workers_r2r_upload: int = 5
+    max_workers_r2r_upload: int = 5 # Passar para process_single_source_document
 ):
-    print("--- DEBUG: Entering run_pipeline function --- ", file=sys.stderr) # DEBUG LOG
     """
-    Executa o pipeline ETL completo, focado na ingestão do Google Drive.
+    Orquestra o pipeline ETL completo.
 
-    Coordena a ingestão via `ingest_all_gdrive_content`, processamento paralelo
-    de documentos/vídeos (chunking, anotação, armazenamento, indexação) e loga
-    um resumo final.
-
-    Args:
-        source (str): Tipo da fonte de dados (gdrive, video, local).
-        local_dir (str): Diretório para fontes 'video' ou 'local'.
-        dry_run (bool): Se True, executa a ingestão mas pula anotação e indexação.
-        dry_run_limit (Optional[int]): Limita o número de arquivos processados pela
-                                        ingestão do Google Drive em modo dry_run.
-        skip_annotation (bool): Se True, pula a etapa de anotação via CrewAI.
-        skip_indexing (bool): Se True, pula o armazenamento no Supabase e indexação no R2R.
-        max_workers_r2r_upload (int): Número máximo de threads para uploads R2R.
-
-    Raises:
-        ValueError: Se variáveis de ambiente essenciais não estiverem configuradas.
-        Exception: Se ocorrer erro na inicialização dos clientes (Supabase, R2R, Annotator).
+    1. Ingere dados da fonte especificada (Google Drive ou diretório local).
+    2. Processa transcrições de vídeo (se houver).
+    3. Processa cada documento/transcrição em paralelo usando ThreadPoolExecutor,
+       chamando `process_single_source_document` para cada um.
+    4. Limpa o diretório temporário de vídeos.
     """
-    # Tentar carregar explicitamente o .env da raiz do projeto
-    # Esta parte pode permanecer aqui ou ser movida para fora se a configuração for global
-    dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
-    loaded = load_dotenv(dotenv_path=dotenv_path, override=True, verbose=True)
-    if not loaded:
-        logger.warning(f"Arquivo .env não encontrado ou não carregado em: {dotenv_path}. Tentando carregar do diretório atual ou ambiente.")
-        load_dotenv(override=True, verbose=True)
-    else:
-        logger.info(f"Arquivo .env carregado de: {dotenv_path}")
-
-    supabase_url = os.getenv("SUPABASE_URL")
-    # Usar SUPABASE_SERVICE_KEY consistentemente
-    supabase_service_key = os.getenv("SUPABASE_SERVICE_KEY") 
-    r2r_base_url = os.getenv("R2R_BASE_URL")
-
-    # Validação movida para o início da função
-    if not all([supabase_url, supabase_service_key, r2r_base_url]):
-        logging.error(f"Variáveis de ambiente obrigatórias ausentes: SUPABASE_URL={'OK' if supabase_url else 'FALTA'}, SUPABASE_SERVICE_KEY={'OK' if supabase_service_key else 'FALTA'}, R2R_BASE_URL={'OK' if r2r_base_url else 'FALTA'}")
-        # Considerar levantar uma exceção em vez de return para testes
-        raise ValueError("Missing required environment variables for pipeline execution.")
-        # return
-
-    # Inicialização dos clientes e agentes dentro da função para escopo de execução
-    # Isso permite mockar as instâncias durante os testes
-    try:
-        supabase: Client = create_client(supabase_url, supabase_service_key) # Usar a variável correta
-        logger.info("Cliente Supabase inicializado para pipeline ETL.")
-    except Exception as e:
-        logger.error(f"Erro ao inicializar cliente Supabase: {e}", exc_info=True)
-        raise # Re-lança a exceção para falhar o pipeline
-        
-    try:
-        r2r_client = R2RClientWrapper()
-        logger.info("R2R Client Wrapper inicializado para pipeline ETL.")
-    except Exception as e:
-        logger.error(f"Erro ao inicializar R2R Client Wrapper: {e}", exc_info=True)
-        raise # Re-lança a exceção
-        
-    try:
-        annotator = AnnotatorAgent()
-        # Verificar se annotator.run existe, mesmo que não seja explicitamente chamado aqui
-        # A verificação original está mantida para segurança, mas pode ser redundante
-        if not hasattr(annotator, 'run'):
-            logger.error("ERRO CRÍTICO: Instância de AnnotatorAgent NÃO possui o método 'run' após a criação.")
-            raise TypeError("AnnotatorAgent instance is missing the 'run' method.")
-        logger.info("AnnotatorAgent inicializado para pipeline ETL.")
-    except Exception as e:
-        logger.error(f"Erro ao inicializar AnnotatorAgent: {e}", exc_info=True)
-        raise # Re-lança a exceção
-
-    # Step 1: Ingestão de Dados por fonte
-    logging.info(f"Starting ETL pipeline for source: {source}")
-    all_files_data = []
+    all_source_data = []
     temp_video_dir = None
-    temp_dirs_to_clean = []
-    try:
-        if source == 'gdrive':
-            logging.info("--- Etapa 1: Ingestão de Dados (GDrive) ---")
-            ingested_data, temp_video_dir = ingest_all_gdrive_content(dry_run=dry_run)
-            all_files_data = ingested_data
-            if temp_video_dir:
-                temp_dirs_to_clean.append(temp_video_dir)
-        elif source == 'local':
-            logging.info(f"Ingestão de arquivos locais de: {local_dir}")
-            all_files_data = ingest_local_directory(local_dir, dry_run=dry_run, dry_run_limit=dry_run_limit)
-        elif source == 'video':
-            logging.info(f"Ingestão de vídeos de: {local_dir}")
-            video_results = process_all_videos_in_directory(local_dir)
-            all_files_data = [
-                {'content': data.get('text'), 'metadata': data.get('metadata', {})}
-                for data in video_results.values()
-            ]
-        else:
-            logging.error(f"Source '{source}' não suportado para pipeline ETL.")
-            raise ValueError(f"Source '{source}' not supported for ETL pipeline.")
+    processed_successfully = True # Flag para rastrear sucesso geral
 
-        if not all_files_data:
-            logging.warning("Nenhum dado ingerido. Saindo do pipeline.")
-            return
-        if dry_run:
-            logging.info("Dry run: Pulando etapas de anotação e indexação.")
-            return
+    # --- Etapa 1: Ingestão (Gdrive ou Local) ---
+    if source == 'gdrive':
+        logging.info("Iniciando ingestão do Google Drive...")
+        start_gdrive = time.time()
+        gdrive_data, temp_video_dir = ingest_all_gdrive_content(dry_run=dry_run)
+        all_source_data.extend(gdrive_data)
+        gdrive_time = time.time() - start_gdrive
+        logging.info(f"Ingestão do Google Drive concluída em {gdrive_time:.2f} segundos. {len(gdrive_data)} itens brutos obtidos.")
+    elif source == 'local':
+        logging.info(f"Iniciando ingestão do diretório local: {local_dir}")
+        start_local = time.time()
+        local_data = ingest_local_directory(local_dir, dry_run=dry_run)
+        all_source_data.extend(local_data)
+        local_time = time.time() - start_local
+        logging.info(f"Ingestão local concluída em {local_time:.2f} segundos. {len(local_data)} itens obtidos.")
+    else:
+        logging.error(f"Fonte desconhecida: {source}. Use 'gdrive' ou 'local'.")
+        return
 
-        # --- Step 2 & 3: Chunking, Annotating and Indexing Data --- 
-        logging.info("--- Step 2 & 3: Chunking, Annotating and Indexing Data ---")
-        total_processed_chunks = 0
-        processed_sources = set()
-        failed_sources = set()
-        max_workers_processing = 5 # Usar um valor razoável para processamento paralelo
+    # Aplicar limite de dry-run se especificado
+    if dry_run and dry_run_limit is not None and len(all_source_data) > dry_run_limit:
+        logging.warning(f"Dry run limitado aos primeiros {dry_run_limit} itens de {len(all_source_data)}. ")
+        all_source_data = all_source_data[:dry_run_limit]
 
-        # *** RESTAURADO: Usar ThreadPoolExecutor para processar documentos em paralelo ***
-        with ThreadPoolExecutor(max_workers=max_workers_processing) as executor:
-            future_to_source = {
-                executor.submit(
+    # --- Etapa 2: Processamento de Vídeos (se GDrive foi usado) ---
+    video_transcriptions = []
+    if temp_video_dir and os.path.exists(temp_video_dir):
+        logging.info("Iniciando processamento de transcrição de vídeos...")
+        start_video = time.time()
+        # Assumindo que process_all_videos_in_directory retorna lista de dicts com 'content' e 'metadata'
+        transcription_results = process_all_videos_in_directory(temp_video_dir)
+        video_transcriptions.extend(transcription_results)
+        video_time = time.time() - start_video
+        logging.info(f"Processamento de vídeos concluído em {video_time:.2f} segundos. {len(video_transcriptions)} transcrições obtidas.")
+        # Adicionar transcrições aos dados a serem processados
+        all_source_data.extend(video_transcriptions)
+    elif temp_video_dir:
+         logging.warning(f"Diretório temporário de vídeo {temp_video_dir} não encontrado após ingestão. Transcrições puladas.")
+
+    # --- Etapa 3: Processamento Paralelo (Chunking, Anotação, Armazenamento, Indexação) ---
+    if not all_source_data:
+        logging.warning("Nenhum dado fonte encontrado ou obtido após ingestão/transcrição. Pipeline encerrado.")
+    else:
+        logging.info(f"Iniciando processamento paralelo de {len(all_source_data)} documentos/transcrições...")
+        start_parallel = time.time()
+
+        # Inicializar AnnotatorAgent UMA VEZ aqui se não for pular anotação
+        annotator_instance = None
+        if not skip_annotation:
+            try:
+                annotator_instance = AnnotatorAgent()
+            except Exception as agent_init_error:
+                logging.error(f"Falha ao inicializar AnnotatorAgent: {agent_init_error}. Anotação será pulada.", exc_info=True)
+                skip_annotation = True # Forçar pulo da anotação se o agente falhar
+
+        total_chunks_indexed = 0
+        files_processed_count = 0
+        files_failed_count = 0
+
+        # Determinar número de workers para processamento de documentos
+        # Usar um número razoável, talvez baseado em CPU cores ou fixo
+        max_workers_docs = int(os.cpu_count() or 4) 
+        logging.info(f"Usando {max_workers_docs} workers para processamento paralelo de documentos.")
+
+        with ThreadPoolExecutor(max_workers=max_workers_docs) as executor:
+            future_to_source = {executor.submit(
                     process_single_source_document,
                     source_doc,
-                    annotator,
-                    r2r_client,
-                    supabase,
+                annotator_instance,
+                r2r_client, # Passar a instância R2R inicializada
+                supabase, # Passar a instância Supabase inicializada
                     skip_annotation,
                     skip_indexing,
-                    # Passar max_workers para upload R2R (pode ser diferente)
-                    # max_workers_r2r_upload=5 
-                ): source_doc.get('metadata', {}).get('source_name', f'unknown_source_{i}')
-                for i, source_doc in enumerate(all_files_data)
-            }
+                max_workers_r2r_upload
+            ): source_doc.get('filename', source_doc.get('metadata', {}).get('source_name', 'unknown_source')) for source_doc in all_source_data}
 
             for future in as_completed(future_to_source):
-                source_name = future_to_source[future]
+                source_name_completed = future_to_source[future]
+                files_processed_count += 1
                 try:
-                    num_chunks = future.result() # Obter o resultado da thread
-                    if num_chunks is not None:
-                        total_processed_chunks += num_chunks
-                        processed_sources.add(source_name)
-                        logging.info(f"Successfully processed {source_name} ({num_chunks} chunks sent to R2R).")
+                    result = future.result() # Retorna contagem de chunks R2R ou None em erro
+                    if result is not None:
+                        total_chunks_indexed += result
+                        logging.info(f"Processamento de '{source_name_completed}' concluído. {result} chunks indexados.")
                     else:
-                        logging.warning(f"Processing skipped entirely for: {source_name}")
-                        failed_sources.add(source_name)
+                        # result é None, indica erro crítico no processamento deste arquivo
+                        files_failed_count += 1
+                        logging.error(f"Processamento de '{source_name_completed}' falhou com erro crítico.")
+                        processed_successfully = False # Marcar falha geral
                 except Exception as exc:
-                     logging.error(f'{source_name} generated an exception during processing: {exc}', exc_info=True)
-                     failed_sources.add(source_name)
-        # *** FIM RESTAURADO ***
+                    files_failed_count += 1
+                    logging.error(f'Processamento de "{source_name_completed}" gerou exceção: {exc}', exc_info=True)
+                    processed_successfully = False # Marcar falha geral
 
-        # --- Final Summary --- 
-        logging.info("\n--- ETL Pipeline Finished ---")
-        logging.info(f"Total source documents/videos processed attempt: {len(all_files_data)}")
-        logging.info(f"Successfully processed sources: {len(processed_sources)}")
-        logging.info(f"Failed/Skipped sources: {len(failed_sources)}")
-        logging.info(f"Total chunks processed and potentially indexed: {total_processed_chunks}")
-        if failed_sources:
-            logging.warning(f"Failed sources list: {failed_sources}")
+        parallel_time = time.time() - start_parallel
+        logging.info(f"Processamento paralelo concluído em {parallel_time:.2f} segundos.")
+        logging.info(f"Resumo: {files_processed_count} arquivos tentados, {files_failed_count} falhas críticas. Total de {total_chunks_indexed} chunks indexados no R2R.")
 
-    except Exception as e:
-        logging.error(f"Erro fatal no pipeline ETL: {e}", exc_info=True)
-        raise
-    finally:
-        # Limpeza de diretórios temporários
-        for td in temp_dirs_to_clean:
-                try:
-                    shutil.rmtree(td)
-                    logging.info(f"Diretório temporário removido: {td}")
-                except Exception as cleanup_err:
-                    logging.error(f"Erro ao limpar diretório temporário {td}: {cleanup_err}")
+    # --- Etapa 4: Limpeza --- 
+    if temp_video_dir and os.path.exists(temp_video_dir):
+        try:
+            shutil.rmtree(temp_video_dir)
+            logging.info(f"Diretório temporário de vídeos {temp_video_dir} limpo com sucesso.")
+        except Exception as e:
+            logging.error(f"Erro ao limpar diretório temporário {temp_video_dir}: {e}")
+
+    if not processed_successfully:
+        logging.error("Pipeline ETL concluído com uma ou mais falhas críticas.")
+        # Considerar lançar uma exceção ou retornar um código de erro aqui?
+        # sys.exit(1) # Descomentar para fazer o processo sair com erro
+    else:
+        logging.info("Pipeline ETL concluído com sucesso.")
 
 def main():
-    print("--- DEBUG: Entering main function --- ", file=sys.stderr) # DEBUG LOG
-    """Função principal para executar o pipeline via linha de comando."""
-    parser = argparse.ArgumentParser(description="Pipeline ETL para processar e indexar conteúdo PDC do Google Drive.")
-    parser.add_argument("--source", type=str, required=True, choices=['gdrive', 'video', 'local'], help="Tipo da fonte de dados (gdrive, video, local)")
-    parser.add_argument("--local-dir", type=str, default="data/raw", help="Diretório para fontes 'video' ou 'local'. Padrão: data/raw")
-    parser.add_argument("--skip-annotation", action="store_true", help="Pula a etapa de anotação via CrewAI.")
-    parser.add_argument("--skip-indexing", action="store_true", help="Pula o armazenamento no Supabase e indexação no R2R.")
-    parser.add_argument("--dry-run", action="store_true", help="Executa apenas a ingestão do GDrive e mostra o que seria processado.")
-    parser.add_argument("--dry-run-limit", type=int, default=None, help="Limita o número de arquivos na ingestão do GDrive em modo dry-run.")
-    parser.add_argument("--max-r2r-workers", type=int, default=5, help="Número máximo de threads para upload paralelo ao R2R.")
+    parser = argparse.ArgumentParser(description="Pipeline ETL para processar conteúdo (Gdrive/Local), anotar (CrewAI) e indexar (R2R/Supabase).")
+    parser.add_argument('--source', type=str, required=True, choices=['gdrive', 'local'], help="Fonte dos dados ('gdrive' ou 'local')")
+    parser.add_argument('--local-dir', type=str, help="Diretório local para usar se source='local'")
+    parser.add_argument('--dry-run', action='store_true', help="Executa sem fazer alterações reais (downloads, anotações, uploads)")
+    parser.add_argument('--dry-run-limit', type=int, help="Limita o número de itens processados no dry run")
+    parser.add_argument('--skip-annotation', action='store_true', help="Pula a etapa de anotação com CrewAI")
+    parser.add_argument('--skip-indexing', action='store_true', help="Pula o armazenamento no Supabase e indexação no R2R")
+    parser.add_argument('--max-workers-r2r', type=int, default=5, help="Número máximo de workers para upload paralelo no R2R")
 
     args = parser.parse_args()
 
-    # Configurar logging para arquivo e console
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, "etl.log")
+    if args.source == 'local' and not args.local_dir:
+        parser.error("--local-dir é obrigatório quando --source='local'")
 
-    # Remover handlers antigos para evitar duplicação em execuções múltiplas no mesmo processo (raro)
-    for handler in logging.root.handlers[:]:
-        logging.root.removeHandler(handler)
+    logging.info(f"Iniciando pipeline ETL com os seguintes argumentos: {args}")
 
-    # Configurar de novo
-    log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
-    log_level = getattr(logging, log_level_str, logging.INFO)
-    
-    logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(levelname)s - [%(name)s:%(lineno)d] - %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='a'), # Append mode
-            logging.StreamHandler() # Console
-        ]
+    run_pipeline(
+        source=args.source,
+        local_dir=args.local_dir,
+        dry_run=args.dry_run,
+        dry_run_limit=args.dry_run_limit,
+        skip_annotation=args.skip_annotation,
+        skip_indexing=args.skip_indexing,
+        max_workers_r2r_upload=args.max_workers_r2r
     )
 
-    logger.info(f"\n===== INICIANDO PIPELINE ETL em {datetime.now()} =====")
-    logger.info(f"Argumentos: {args}")
-
-    try:
-        # Chamar run_pipeline sem os argumentos removidos
-        run_pipeline(
-            source=args.source,
-            local_dir=args.local_dir,
-            dry_run=args.dry_run,
-            dry_run_limit=args.dry_run_limit,
-            skip_annotation=args.skip_annotation,
-            skip_indexing=args.skip_indexing,
-            max_workers_r2r_upload=args.max_r2r_workers
-        )
-    except ValueError as ve:
-         logger.error(f"Erro de configuração impediu a execução do pipeline: {ve}")
-    except Exception as e:
-         logger.error(f"Erro inesperado durante a execução do pipeline: {e}", exc_info=True)
-    finally:
-        logger.info(f"===== PIPELINE ETL FINALIZADO em {datetime.now()} =====\n")
-
+    logging.info("Pipeline ETL finalizado.")
 
 if __name__ == "__main__":
-    print("--- DEBUG: Running under __main__ block --- ", file=sys.stderr) # DEBUG LOG
     main() 

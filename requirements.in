@@ -23,4 +23,7 @@ google-api-python-client
 
 # Dev dependencies (from requirements-dev.txt)
 pytest-cov
-flake8 
+flake8
+tenacity
+tqdm==4.66.4
+trafilatura==1.9.0 
