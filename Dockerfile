@@ -46,7 +46,7 @@ COPY normalize_json.py .
 EXPOSE 8000
 
 # Define o ponto de entrada para executar o módulo ETL com python3
-ENTRYPOINT ["python3", "-m", "etl.annotate_and_index", "--source", "gdrive"]
+ENTRYPOINT ["python3", "-m", "etl.annotate_and_index"]
 
 # Não definir CMD também, deixar o Start Command do Railway controlar # Comentário antigo, remover?
 # Não definir CMD. ENTRYPOINT lida com tudo. 
