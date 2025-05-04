@@ -821,17 +821,20 @@ def create_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
 #      para não esperar mais a lista de resultados de ingest_gdrive_folder) ...
 
 def ingest_all_gdrive_content(dry_run=False):
-    """Função principal para iniciar a ingestão de todas as pastas raiz configuradas."""
-    service = authenticate_gdrive()
-    if not service:
-        logger.critical("Falha na autenticação com Google Drive. Abortando.")
-        return None # Modificado para retornar None em falha
+    """
+    Função principal para ingerir conteúdo de todas as pastas raiz configuradas.
+    """
+    # DEBUG: Logar o dicionário os.environ completo antes de acessar a variável
+    try:
+        env_vars_json = json.dumps(dict(os.environ), indent=2, sort_keys=True)
+        logger.debug(f"[DEBUG env vars] Conteúdo de os.environ antes de get('GDRIVE_ROOT_FOLDER_IDS'):\n{env_vars_json}")
+    except Exception as e:
+        logger.error(f"[DEBUG env vars] Erro ao tentar serializar os.environ: {e}")
 
-    # Usar variável de ambiente para IDs das pastas raiz, separadas por vírgula
-    root_folder_ids_str = os.getenv('GDRIVE_ROOT_FOLDER_IDS')
+    root_folder_ids_str = os.environ.get('GDRIVE_ROOT_FOLDER_IDS')
     if not root_folder_ids_str:
         logger.critical("Variável de ambiente GDRIVE_ROOT_FOLDER_IDS não definida.")
-        return None # Modificado
+        return None # Retorna None se não estiver definida
 
     root_folder_ids = [folder_id.strip() for folder_id in root_folder_ids_str.split(',')]
     logger.info(f"Pastas raiz a serem processadas: {root_folder_ids}")
