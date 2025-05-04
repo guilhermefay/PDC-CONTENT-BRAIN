@@ -45,6 +45,8 @@ COPY normalize_json.py .
 # Make port 8000 available (opcional, mas inofensivo)
 EXPOSE 8000
 
-# ENTRYPOINT ["python3"] # REMOVIDO NOVAMENTE
+# Define o ponto de entrada para executar o módulo ETL com python3
+ENTRYPOINT ["python3", "-m", "etl.annotate_and_index", "--source", "gdrive"]
 
-# Não definir CMD também, deixar o Start Command do Railway controlar 
+# Não definir CMD também, deixar o Start Command do Railway controlar # Comentário antigo, remover?
+# Não definir CMD. ENTRYPOINT lida com tudo. 
