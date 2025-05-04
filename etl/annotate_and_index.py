@@ -88,8 +88,7 @@ from infra.r2r_client import R2RClientWrapper
 from ingestion.gdrive_ingest import ingest_all_gdrive_content
 # from ingestion.local_ingest import ingest_local_directory
 from ingestion.local_ingest import ingest_local_directory
-# from ingestion.video_transcription import process_all_videos_in_directory
-from ingestion.video_transcription import process_all_videos_in_directory
+from ingestion.video_transcription import process_video # Importar a função específica
 # --- Fim Comentado ---
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
@@ -325,12 +324,56 @@ def split_content_into_chunks(text: str, initial_metadata: Dict[str, Any], max_c
     return [c for c in chunks_data if c.get("content")]
 
 def process_video_data(video_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """(REMOVIDO - Lógica agora integrada em gdrive_ingest)
-    Converte o resultado da transcrição de vídeo para o formato esperado [{'content': str, 'metadata': dict}].
     """
-    # Função mantida vazia ou pode ser removida completamente
-    logger.warning("Função process_video_data não é mais usada diretamente no ETL.")
-    return []
+    Processa os resultados da ingestão de vídeo, chama a transcrição e formata
+    os dados com o texto da transcrição e os metadados originais.
+    """
+    logger.info(f"Iniciando processamento e transcrição para {len(video_results)} vídeo(s) ingerido(s)...")
+    formatted_results = []
+    processed_count = 0
+    failed_count = 0
+
+    for video_data in video_results:
+        original_metadata = video_data.get("metadata", {})
+        video_path = video_data.get("path")
+        video_name = original_metadata.get("gdrive_name", "Nome Desconhecido")
+        gdrive_id = original_metadata.get("gdrive_id")
+
+        if not video_path or not os.path.exists(video_path):
+            logger.error(f"Caminho do vídeo inválido ou não encontrado para {video_name} (ID: {gdrive_id}). Pulando transcrição.")
+            failed_count += 1
+            continue
+
+        # Chamar a função de transcrição (que tenta AssemblyAI/WhisperX)
+        # Nota: Isso pode ser demorado dependendo do vídeo e método
+        transcription_result = process_video(video_path)
+
+        if transcription_result and transcription_result.get("text"):
+            transcription_text = transcription_result.get("text", "").strip()
+            transcriber_metadata = transcription_result.get("metadata", {})
+            if transcription_text:
+                # Combinar metadados originais com metadados da transcrição
+                combined_metadata = original_metadata.copy() # Começa com os metadados do GDrive
+                combined_metadata.update(transcriber_metadata) # Adiciona metadados do transcritor
+                combined_metadata["origin"] = "video_transcription" # Indica a origem
+
+                # Criar o dicionário final no formato esperado
+                formatted_results.append({
+                    "filename": video_name, # Usar nome original como filename?
+                    "content": transcription_text,
+                    "metadata": combined_metadata
+                })
+                logger.info(f"Transcrição bem-sucedida e formatada para {video_name} (ID: {gdrive_id})")
+                processed_count += 1
+            else:
+                logger.warning(f"Transcrição para {video_name} (ID: {gdrive_id}) resultou em texto vazio. Descartando.")
+                failed_count += 1
+        else:
+            logger.error(f"Falha na transcrição para {video_name} (ID: {gdrive_id}). Descartando.")
+            failed_count += 1
+
+    logger.info(f"Processamento de dados de vídeo concluído. Sucesso: {processed_count}, Falhas/Vazios: {failed_count}.")
+    return formatted_results
 
 def process_local_data(local_files_data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """(REMOVIDO - Fonte local não é mais suportada)
@@ -886,7 +929,7 @@ def run_pipeline(
         logging.info("Iniciando processamento de transcrição de vídeos...")
         start_video = time.time()
         # Assumindo que process_all_videos_in_directory retorna lista de dicts com 'content' e 'metadata'
-        transcription_results = process_all_videos_in_directory(temp_video_dir)
+        transcription_results = process_video_data(video_transcriptions)
         video_transcriptions.extend(transcription_results)
         video_time = time.time() - start_video
         logging.info(f"Processamento de vídeos concluído em {video_time:.2f} segundos. {len(video_transcriptions)} transcrições obtidas.")
