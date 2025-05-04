@@ -689,37 +689,20 @@ def run_pipeline(
     # --- Lógica de Ingestão ---
     all_source_data = []
     processed_files_count = 0
-    temp_download_dir = None # Inicializar diretório temporário
 
     try:
-        # Criar diretório temporário para downloads do GDrive
-        temp_download_dir = tempfile.mkdtemp(prefix="gdrive_videos_")
-        logging.info(f"Diretório temporário para vídeos do GDrive: {temp_download_dir}")
-        # Passar supabase client para a função de ingestão
-        ingested_data = ingest_all_gdrive_content(target_dir=temp_download_dir, supabase_client=supabase)
+        # Corrigir a chamada: remover target_dir e supabase_client, passar dry_run
+        # Note: dry_run é um argumento de run_pipeline, então o passamos
+        ingested_data = ingest_all_gdrive_content(dry_run=dry_run)
         all_source_data.extend(ingested_data)
         processed_files_count = len(ingested_data) # Contagem inicial baseada no que foi retornado
 
     except Exception as e_ingest:
          logging.error(f"Erro durante a fase de ingestão da fonte '{source}': {e_ingest}", exc_info=True)
-         # Limpar diretório temporário se foi criado e ocorreu erro na ingestão
-         if temp_download_dir and os.path.exists(temp_download_dir):
-             try:
-                 shutil.rmtree(temp_download_dir)
-                 logging.info(f"Diretório temporário {temp_download_dir} removido devido a erro na ingestão.")
-             except Exception as e_clean:
-                 logging.error(f"Erro ao limpar diretório temporário {temp_download_dir}: {e_clean}")
          return # Parar o pipeline se a ingestão falhar
 
     if not all_source_data:
         logging.info("Nenhum dado novo encontrado ou ingerido. Pipeline concluído.")
-        # Limpar diretório temporário se foi criado mas nenhum dado foi ingerido
-        if temp_download_dir and os.path.exists(temp_download_dir):
-             try:
-                 shutil.rmtree(temp_download_dir)
-                 logging.info(f"Diretório temporário {temp_download_dir} removido pois não houve dados.")
-             except Exception as e_clean:
-                 logging.error(f"Erro ao limpar diretório temporário {temp_download_dir}: {e_clean}")
         return
 
     logging.info(f"Ingestão concluída. {len(all_source_data)} arquivos/fontes para processar.")
@@ -737,13 +720,6 @@ def run_pipeline(
 
     if not all_chunks_to_process:
         logging.info("Nenhum chunk gerado a partir dos dados ingeridos. Pipeline concluído.")
-         # Limpar diretório temporário
-        if temp_download_dir and os.path.exists(temp_download_dir):
-            try:
-                shutil.rmtree(temp_download_dir)
-                logging.info(f"Diretório temporário {temp_download_dir} removido.")
-            except Exception as e_clean:
-                logging.error(f"Erro ao limpar diretório temporário {temp_download_dir}: {e_clean}")
         return
 
     logging.info(f"Chunking concluído. {len(all_chunks_to_process)} chunks gerados.")
@@ -824,15 +800,6 @@ def run_pipeline(
 
 
     logging.info(f"Total de {files_marked_count} arquivos marcados como processados no Supabase.")
-
-    # --- Limpeza ---
-    if temp_download_dir and os.path.exists(temp_download_dir):
-        try:
-            shutil.rmtree(temp_download_dir)
-            logging.info(f"Diretório temporário {temp_download_dir} removido com sucesso.")
-        except Exception as e_clean_final:
-            logging.error(f"Erro ao limpar diretório temporário {temp_download_dir} no final: {e_clean_final}")
-
 
     end_time = time.time()
     logging.info(f"Pipeline ETL concluído em {end_time - start_time:.2f} segundos.")
