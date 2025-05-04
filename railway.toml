@@ -1,0 +1,4 @@
+# railway.toml
+[deploy]
+restartPolicyType = "ALWAYS"
+# restartPolicyMaxRetries = 10 # Opcional: definir um limite de retentativas 
