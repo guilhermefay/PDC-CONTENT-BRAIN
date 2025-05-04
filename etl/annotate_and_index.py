@@ -395,29 +395,51 @@ def process_local_data(local_files_data: List[Dict[str, Any]]) -> List[Dict[str,
 
 @default_retry
 def _update_chunk_status_supabase(supabase_client: Client, document_id: str, data_to_update: Dict[str, Any], step_name: str):
-    """Função auxiliar para atualizar o status de um chunk no Supabase (com retentativas)."""
+    """Função auxiliar para atualizar o status de um chunk no Supabase (com retentativas).
+
+    Modificado para enviar apenas os campos que realmente precisam ser atualizados,
+    evitando reenviar 'content' e 'metadata' inteiros para prevenir erros de JSON.
+    """
     if not supabase_client or not document_id:
         return False
-    
-    logger.debug(f"[Supabase Update - {step_name}] Tentando atualizar status para doc_id {document_id}")
+
+    # Selecionar APENAS os campos relevantes para atualização
+    update_payload = {}
+    if 'annotation_status' in data_to_update:
+        update_payload['annotation_status'] = data_to_update['annotation_status']
+    if 'indexing_status' in data_to_update:
+        update_payload['indexing_status'] = data_to_update['indexing_status']
+    if 'keep' in data_to_update:
+        update_payload['keep'] = data_to_update['keep'] # Manter se necessário atualizar o keep
+    if 'annotation_tags' in data_to_update:
+        update_payload['annotation_tags'] = data_to_update['annotation_tags'] # Assumindo que é List[str]
+    if 'annotated_at' in data_to_update:
+        update_payload['annotated_at'] = data_to_update['annotated_at']
+    if 'indexed_at' in data_to_update:
+        update_payload['indexed_at'] = data_to_update['indexed_at']
+    # NÃO incluir 'content' ou 'metadata' inteiros aqui
+
+    if not update_payload: # Não fazer chamada se não houver nada para atualizar
+        logger.debug(f"[Supabase Update - {step_name}] Nada a atualizar para doc_id {document_id}")
+        return True # Considerar sucesso se não há o que fazer
+
+    logger.debug(f"[Supabase Update - {step_name}] Tentando atualizar status para doc_id {document_id} com payload: {update_payload}")
     try:
         response = supabase_client.table('documents')\
-                                  .update(data_to_update)\
+                                  .update(update_payload)\
                                   .eq('document_id', document_id)\
                                   .execute()
         if hasattr(response, 'error') and response.error:
-             # Se ainda der erro após retentativas, logar como erro final
              logger.error(f"[Supabase Update - {step_name}] Erro FINAL ao atualizar status para doc_id {document_id} após retentativas: {response.error}")
              return False
         logger.debug(f"[Supabase Update - {step_name}] Status atualizado para doc_id {document_id}")
         return True
     except (PostgrestAPIError) as e:
-        # Logar erro específico da API que causou a falha final das retentativas
         logger.error(f"[Supabase Update - {step_name}] Erro FINAL API ao atualizar status para doc_id {document_id} após retentativas: {e}")
-        raise # Re-lançar para que tenacity saiba que falhou
+        raise
     except Exception as e:
         logger.error(f"[Supabase Update - {step_name}] Erro FINAL inesperado ao atualizar status para doc_id {document_id} após retentativas: {e}", exc_info=True)
-        raise # Re-lançar para que tenacity saiba que falhou
+        raise
 
 @default_retry
 def _run_annotator_with_retry(annotator: AnnotatorAgent, chunks: List[Dict[str, Any]], source_name: str) -> List[Dict[str, Any]]:
