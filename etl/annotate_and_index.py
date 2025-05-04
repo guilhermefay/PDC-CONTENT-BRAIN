@@ -45,10 +45,12 @@ try:
     # Ajuste para caminho relativo simples assumindo que Docker WORKDIR é /app
     normalize_script_in_container = 'normalize_json.py' 
     result = subprocess.run(['python3', normalize_script_in_container], check=True, capture_output=True, text=True)
-    print(f"--- DEBUG: normalize_json.py stdout:
-{result.stdout} ---", file=sys.stderr)
-    print(f"--- DEBUG: normalize_json.py stderr:
-{result.stderr} ---", file=sys.stderr)
+    # Corrigir f-string com aspas triplas para permitir quebras de linha
+    print(f'''--- DEBUG: normalize_json.py stdout:
+{result.stdout} ---''', file=sys.stderr)
+    # Corrigir f-string com aspas triplas para permitir quebras de linha
+    print(f'''--- DEBUG: normalize_json.py stderr:
+{result.stderr} ---''', file=sys.stderr)
     print(f"--- DEBUG: normalize_json.py finished successfully ---", file=sys.stderr)
     # --- Fim da execução ---
 
