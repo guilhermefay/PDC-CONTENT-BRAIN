@@ -529,12 +529,12 @@ def ingest_gdrive_folder(
     # 1. Paginação: Coletar todos os itens da pasta primeiro
     while True:
         try:
-                response = service.files().list(
-                    q=f"'{folder_id}' in parents and trashed=false",
-                    spaces='drive',
+            response = service.files().list(
+                q=f"'{folder_id}' in parents and trashed=false",
+                spaces='drive',
                 fields='nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, size, parents, capabilities, webViewLink)',
                 pageToken=page_token
-                ).execute()
+            ).execute()
 
             files_in_current_page = response.get('files', [])
             logger.info(f"  Encontrados {len(files_in_current_page)} itens nesta página para {folder_path_log}...")
@@ -608,7 +608,7 @@ def ingest_gdrive_folder(
         text_content = None
         file_data_for_chunking = None # Dados a serem usados para chunk/save
 
-                if mime_type == 'application/vnd.google-apps.folder':
+        if mime_type == 'application/vnd.google-apps.folder':
             # --- Processar Subpasta (Recursão) ---
             logger.info(f"  Identificada SUBPASTA: {file_name}. Iniciando ingestão recursiva...")
             if not dry_run:
@@ -647,14 +647,16 @@ def ingest_gdrive_folder(
                         }
                     else:
                         logger.warning(f"   -> Falha ao extrair texto de {item_path_log}.")
-                        else:
+                        continue # Pular para o próximo item se não extrair texto
+                else:
                     logger.warning(f"   -> Falha ao baixar/exportar {item_path_log}.")
+                    continue # Pular para o próximo item se falhar download
             except Exception as doc_proc_err:
                  logger.error(f"   -> Erro inesperado ao processar documento {item_path_log}: {doc_proc_err}", exc_info=True)
-                 overall_success = False # Marcar falha
+                 overall_success = False # Marcar falha, mas não pular para próximo item (pode ser intermitente)
 
-                elif mime_type in VIDEO_MIME_TYPES:
-             # --- Processar Vídeo ---
+        elif mime_type in VIDEO_MIME_TYPES:
+            # --- Processar Vídeo ---
             file_size_mb = int(item.get('size', 0)) / (1024 * 1024)
             logger.info(f"  Identificado VÍDEO: {item_path_log} (ID: {file_id}, Tipo: {mime_type}, Tamanho: {file_size_mb:.2f} MB)")
             if not can_download:
@@ -689,14 +691,14 @@ def ingest_gdrive_folder(
                         }
                     else:
                          logger.warning(f"   -> Falha ou transcrição vazia para {file_name}.")
-                         overall_success = False
+                         overall_success = False # Marcar falha
                 else:
                     logger.warning(f"   -> Falha ao baixar vídeo {item_path_log}.")
-                    overall_success = False
+                    overall_success = False # Marcar falha
 
             except Exception as video_proc_err:
                  logger.error(f"   -> Erro inesperado ao processar vídeo {item_path_log}: {video_proc_err}", exc_info=True)
-                 overall_success = False
+                 overall_success = False # Marcar falha
             finally:
                  # Limpar vídeo baixado (inalterado)
                  if downloaded_video_path and os.path.exists(downloaded_video_path):
@@ -713,10 +715,9 @@ def ingest_gdrive_folder(
             # if file_data:
             #     file_data_for_chunking = file_data # Preparar para chunk/save se OCR retornar texto
             continue # Pular processamento de imagem por agora
-                        else:
+        else:
             logger.info(f"  -> Ignorando tipo de arquivo não suportado/config: {item_path_log} (Tipo: {mime_type})")
             continue # Pula para o próximo item
-
 
         # --- Processamento Incremental: Chunk e Save ---
         if file_data_for_chunking and supabase_client:
@@ -743,11 +744,12 @@ def ingest_gdrive_folder(
 
                              mark_response = mark_processed(supabase_client, file_id)
                              # Verificar resposta - pode variar, mas ausência de erro é bom sinal
-                             if not getattr(mark_response, 'error', None):
-                                logger.info(f"  -> Arquivo {source_name_log} (ID: {file_id}) marcado como processado.")
-                             else:
-                                logger.error(f"  -> Falha ao marcar {source_name_log} como processado, mas chunks foram salvos. Erro: {mark_response.error}")
+                             if hasattr(mark_response, 'error') and mark_response.error:
+                                logger.error(f"  -> Falha ao marcar {source_name_log} como processado (Erro API Supabase): {mark_response.error}")
                                 overall_success = False # Marcar falhou
+                             else:
+                                logger.info(f"  -> Arquivo {source_name_log} (ID: {file_id}) marcado como processado.")
+
                          except Exception as mark_err:
                              logger.error(f"  -> Erro inesperado ao marcar {source_name_log} como processado: {mark_err}", exc_info=True)
                              overall_success = False # Marcar falhou
@@ -802,7 +804,7 @@ def ingest_all_gdrive_content(dry_run=False):
     # DEBUG: Logar o dicionário os.environ completo antes de acessar a variável
     try:
         env_vars_json = json.dumps(dict(os.environ), indent=2, sort_keys=True)
-        logger.debug(f"[DEBUG env vars] Conteúdo de os.environ antes de get('GDRIVE_ROOT_FOLDER_IDS'):\\n{env_vars_json}")
+        logger.debug(f"[DEBUG env vars] Conteúdo de os.environ antes de get('GDRIVE_ROOT_FOLDER_IDS'):\n{env_vars_json}")
     except Exception as e:
         logger.error(f"[DEBUG env vars] Erro ao tentar serializar os.environ: {e}")
 
@@ -848,7 +850,7 @@ def ingest_all_gdrive_content(dry_run=False):
 
         except HttpError as error:
             logger.error(f"Erro HTTP ao processar pasta raiz {folder_id}: {error}", exc_info=True)
-    except Exception as e:
+        except Exception as e:
             logger.error(f"Erro inesperado ao processar pasta raiz {folder_id}: {e}", exc_info=True)
         # finally: # <-- Bloco finally removido daqui, limpeza é feita dentro de ingest_gdrive_folder
         #     if temp_dir_path and os.path.exists(temp_dir_path):
