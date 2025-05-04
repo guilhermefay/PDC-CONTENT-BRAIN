@@ -663,10 +663,14 @@ def run_pipeline(
     batch_size: int = 100,
     max_workers_pipeline: int = 5
 ):
-    start_time = time.time()
+    """
+    Orquestra todo o pipeline ETL: ingestão, chunking, anotação e indexação.
+    """
+    # ADICIONAR LOG AQUI
+    logger.debug(f"[DEBUG run_pipeline ENTRY] source='{source}', local_dir='{local_dir}', skip_annotation={skip_annotation}, skip_indexing={skip_indexing}")
     logging.info(f"Iniciando pipeline ETL... Fonte: {source}, Local: {local_dir}, Skip Annotation: {skip_annotation}, Skip Indexing: {skip_indexing}")
 
-    # --- Modificado: Inicialização do AnnotatorAgent movida para dentro ---
+    # Inicializar AnnotatorAgent (se necessário)
     annotator = None
     if not skip_annotation:
         try:
