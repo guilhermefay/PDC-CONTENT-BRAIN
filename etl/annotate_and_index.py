@@ -675,7 +675,7 @@ def run_pipeline(
     try:
         logging.info(f"Buscando chunks pendentes para anotação/indexação no Supabase (batch_size={batch_size})...")
         # Busca chunks com annotation_status = 'pending'
-        response: PostgrestAPIResponse = default_retry(
+        response = default_retry(
             lambda: supabase.table("documents")\
             .select("document_id, content, metadata, annotation_status, indexing_status, keep")\
             .eq("annotation_status", "pending")\
