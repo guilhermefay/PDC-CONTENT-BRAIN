@@ -19,6 +19,7 @@ import unicodedata
 import logging
 import tiktoken
 import uuid
+import shutil
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from google.oauth2 import service_account
@@ -827,7 +828,7 @@ def ingest_all_gdrive_content(dry_run=False):
     # DEBUG: Logar o dicionário os.environ completo antes de acessar a variável
     try:
         env_vars_json = json.dumps(dict(os.environ), indent=2, sort_keys=True)
-        logger.debug(f"[DEBUG env vars] Conteúdo de os.environ antes de get('GDRIVE_ROOT_FOLDER_IDS'):\n{env_vars_json}")
+        logger.debug(f"[DEBUG env vars] Conteúdo de os.environ antes de get('GDRIVE_ROOT_FOLDER_IDS'):\\n{env_vars_json}")
     except Exception as e:
         logger.error(f"[DEBUG env vars] Erro ao tentar serializar os.environ: {e}")
 
@@ -836,56 +837,65 @@ def ingest_all_gdrive_content(dry_run=False):
         logger.critical("Variável de ambiente GDRIVE_ROOT_FOLDER_IDS não definida.")
         return None # Retorna None se não estiver definida
 
-    root_folder_ids = [folder_id.strip() for folder_id in root_folder_ids_str.split(',')]
+    root_folder_ids = [folder_id.strip() for folder_id in root_folder_ids_str.split(',') if folder_id.strip()]
     logger.info(f"Pastas raiz a serem processadas: {root_folder_ids}")
 
-    # Criar diretório temporário único para esta execução
-    temp_dir = tempfile.mkdtemp(prefix="gdrive_ingest_")
-    logger.info(f"Diretório temporário criado em: {temp_dir}")
+    all_ingested_items = []
+    temp_dir_path = None # Inicializar como None fora do loop
 
-    overall_pipeline_success = True # Rastrear sucesso geral
+    # <<< INICIALIZAR O SERVICE AQUI >>>
+    service = authenticate_gdrive()
+    if not service:
+        logger.critical("Falha ao autenticar na API do Google Drive. Abortando ingestão.")
+        return None # Retornar None se a autenticação falhar
 
-    try:
-        for folder_id in root_folder_ids:
-            try:
-                folder_metadata = service.files().get(fileId=folder_id, fields='id, name, capabilities').execute()
-                folder_name = folder_metadata.get('name', folder_id) # Usar nome ou ID
-                logger.info(f"\n--- Processando Pasta Raiz: {folder_name} (ID: {folder_id}) ---")
-
-                # Iniciar ingestão recursiva para esta pasta raiz
-                folder_success = ingest_gdrive_folder(
-                    service=service,
-                    folder_name=folder_name,
-                    folder_id=folder_id,
-                    temp_dir_path=temp_dir,
-                    dry_run=dry_run,
-                    access_level='root', # Indicar que é uma pasta raiz
-                    current_path="" # Começa sem caminho relativo
-                )
-                if not folder_success:
-                    overall_pipeline_success = False # Se uma pasta raiz falhar, marcar falha geral
-
-            except HttpError as error:
-                logger.error(f"Erro HTTP ao obter metadados da pasta raiz {folder_id}: {error}")
-                overall_pipeline_success = False
-            except Exception as e:
-                 logger.error(f"Erro inesperado ao processar pasta raiz {folder_id}: {e}", exc_info=True)
-                 overall_pipeline_success = False
-
-    finally:
-        # Limpar diretório temporário
+    for folder_id in root_folder_ids:
         try:
-            shutil.rmtree(temp_dir)
-            logger.info(f"Diretório temporário removido: {temp_dir}")
+            # Obter nome da pasta raiz para logs
+            folder_metadata = service.files().get(fileId=folder_id, fields='id, name, capabilities').execute()
+            folder_name = folder_metadata.get('name', folder_id)
+            logger.info(f"Iniciando processamento da pasta raiz: '{folder_name}' (ID: {folder_id})")
+
+            # Criar diretório temporário para esta pasta raiz
+            # (Gerenciado agora dentro de ingest_gdrive_folder)
+            # temp_dir_path = tempfile.mkdtemp()
+            # logger.info(f"Diretório temporário criado em: {temp_dir_path}")
+
+            # Iniciar ingestão recursiva (passando o service)
+            # A função ingest_gdrive_folder agora gerencia seu próprio diretório temp
+            ingest_successful = ingest_gdrive_folder(
+                service=service, # Passar o service autenticado
+                folder_name=folder_name,
+                folder_id=folder_id,
+                # temp_dir_path=temp_dir_path, # Removido, gerenciado internamente
+                dry_run=dry_run,
+                access_level=None # Determinar acesso se necessário
+            )
+            # A função ingest_gdrive_folder agora retorna bool
+            if not ingest_successful:
+                 logger.warning(f"Houve falhas ao processar/salvar itens na pasta '{folder_name}' (ID: {folder_id}). Verifique logs anteriores.")
+            # A lógica de agregação foi movida para dentro de ingest_gdrive_folder
+            # if ingested_for_folder:
+            #     all_ingested_items.extend(ingested_for_folder)
+
+        except HttpError as error:
+            logger.error(f"Erro HTTP ao processar pasta raiz {folder_id}: {error}", exc_info=True)
         except Exception as e:
-            logger.error(f"Erro ao remover diretório temporário {temp_dir}: {e}")
+            logger.error(f"Erro inesperado ao processar pasta raiz {folder_id}: {e}", exc_info=True)
+        # finally: # <-- Bloco finally removido daqui, limpeza é feita dentro de ingest_gdrive_folder
+        #     if temp_dir_path and os.path.exists(temp_dir_path):
+        #         try:
+        #             shutil.rmtree(temp_dir_path)
+        #             logger.info(f"Diretório temporário {temp_dir_path} removido.")
+        #         except Exception as e_clean:
+        #             logger.error(f"Erro ao remover diretório temporário {temp_dir_path}: {e_clean}", exc_info=True)
+        #     temp_dir_path = None # Resetar para a próxima pasta
 
-    if overall_pipeline_success:
-         logger.info("\n--- Ingestão do Google Drive concluída com sucesso (todos os arquivos processados ou pulados corretamente). ---")
-    else:
-         logger.warning("\n--- Ingestão do Google Drive concluída, mas ocorreram falhas no salvamento de chunks ou marcação de arquivos. Verifique os logs. ---")
-
-    return None # Não retorna mais dados, pois são salvos incrementalmente
+    # Retornar None por enquanto, pois run_pipeline não espera mais os dados diretamente
+    # A lógica de processamento pega os dados do Supabase agora.
+    # No futuro, pode retornar um status ou resumo.
+    logger.info("Processamento de todas as pastas raiz concluído.")
+    return None # Mudar se necessário
 
 
 def main():
