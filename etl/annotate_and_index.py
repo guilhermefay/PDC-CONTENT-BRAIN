@@ -190,6 +190,14 @@ def _run_annotation(annotator: AnnotatorAgent, chunk: Dict[str, Any]) -> Optiona
         chunk['metadata'] = _sanitize_metadata(chunk['metadata'])
         
     try:
+        # === LOG TYPE CHECK ===
+        logger.info(f"VERIFICANDO TIPO DE 'chunk' ANTES DE annotator.run: {type(chunk).__name__}")
+        if not isinstance(chunk, dict):
+             logger.error(f"ERRO CRÍTICO: 'chunk' NÃO é um dicionário antes de chamar annotator.run! Valor: {chunk}")
+             # Decide how to handle - maybe raise an error or return None?
+             raise TypeError(f"'chunk' should be a dict, but got {type(chunk).__name__}")
+        # === END LOG TYPE CHECK ===
+        
         result = annotator.run(chunk)
         logger.debug(f"Resultado da anotação para {chunk.get('document_id', 'ID Desconhecido')}: Keep={result.keep if result else None}")
         return result
