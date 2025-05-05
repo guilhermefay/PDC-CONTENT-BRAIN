@@ -190,13 +190,12 @@ def _run_annotation(annotator: AnnotatorAgent, chunk: Dict[str, Any]) -> Optiona
         chunk['metadata'] = _sanitize_metadata(chunk['metadata'])
         
     try:
-        # === LOG TYPE CHECK ===
-        logger.info(f"VERIFICANDO TIPO DE 'chunk' ANTES DE annotator.run: {type(chunk).__name__}")
-        if not isinstance(chunk, dict):
-             logger.error(f"ERRO CRÍTICO: 'chunk' NÃO é um dicionário antes de chamar annotator.run! Valor: {chunk}")
-             # Decide how to handle - maybe raise an error or return None?
-             raise TypeError(f"'chunk' should be a dict, but got {type(chunk).__name__}")
-        # === END LOG TYPE CHECK ===
+        # === REMOVER LOG TYPE CHECK ===
+        # logger.info(f"VERIFICANDO TIPO DE 'chunk' ANTES DE annotator.run: {type(chunk).__name__}")
+        # if not isinstance(chunk, dict):
+        #      logger.error(f"ERRO CRÍTICO: 'chunk' NÃO é um dicionário antes de chamar annotator.run! Valor: {chunk}")
+        #      raise TypeError(f"'chunk' should be a dict, but got {type(chunk).__name__}")
+        # === END REMOVE LOG TYPE CHECK ===
         
         result = annotator.run(chunk)
         logger.debug(f"Resultado da anotação para {chunk.get('document_id', 'ID Desconhecido')}: Keep={result.keep if result else None}")
@@ -315,10 +314,10 @@ def process_single_chunk(
     ):
         logger.debug(f"Chunk {doc_id}: Tentando indexação (Keep={keep_chunk}, Status atual: {current_indexing_status}).")
         try:
-            # === COMENTAR TEMPORARIAMENTE PARA TESTE ===
-            # _upload_chunk_r2r(chunk) # Já tem retentativa e checagem de r2r_client
-            logger.warning(f"Chunk {doc_id}: Upload R2R comentado para teste.") # Log temporário
-            # === FIM DO COMENTÁRIO ===
+            # === REMOVER COMENTÁRIO PARA REATIVAR R2R ===
+            _upload_chunk_r2r(chunk) # Já tem retentativa e checagem de r2r_client
+            # logger.warning(f"Chunk {doc_id}: Upload R2R comentado para teste.") # Remover Log temporário
+            # === FIM DO REMOVER COMENTÁRIO ===
             logger.info(f"Chunk {doc_id}: Indexação bem-sucedida.")
             update = {
                 "indexing_status": "done",
