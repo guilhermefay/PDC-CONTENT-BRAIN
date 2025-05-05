@@ -209,6 +209,17 @@ class AnnotatorAgent(BaseAgent):
                 loggable_input["content"] = loggable_input["content"][:100] + "..." # Logar apenas início do conteúdo
                 logger.debug(f"[Agent Run - {current_chunk_index}] Input para crew.kickoff (sanitizado): {loggable_input}")
 
+                # --- LOG DETALHADO ANTES DO KICKOFF ---
+                try:
+                    meta_types_before_kickoff = {k: type(v).__name__ for k, v in task_input_dict.get("meta", {}).items()}
+                    logger.info(f"[Agent Run - {current_chunk_index}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
+                    # Logar o valor específico de chunk_index se existir
+                    if "chunk_index" in task_input_dict.get("meta", {}):
+                         logger.info(f"[Agent Run - {current_chunk_index}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
+                except Exception as log_exc:
+                     logger.error(f"[Agent Run - {current_chunk_index}] Erro ao tentar logar tipos antes do kickoff: {log_exc}")
+                # --- FIM DO LOG DETALHADO ---
+
                 crew_output_result = None # Inicializar fora do try
                 annotation_result: Optional[ChunkOut] = None # Inicializar fora do try
 
