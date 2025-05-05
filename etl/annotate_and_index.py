@@ -346,7 +346,7 @@ def process_single_chunk(
                             logger.warning(f"Falha ao atualizar status da anotação para chunk {document_id}. Prosseguindo...")
                             # Decidir se quer parar ou continuar se o update falhar
 
-                    else:
+                else:
                         # Caso annotator.run retorne None ou algo inesperado
                         logger.warning(f"Anotação retornou resultado inesperado para chunk {document_id}. Marcando como erro.")
                         annotation_status = 'error'
@@ -478,8 +478,8 @@ def run_pipeline(
     # Inicializar AnnotatorAgent (se necessário)
     annotator = None
     if not skip_annotation:
-        try:
-            annotator = AnnotatorAgent()
+    try:
+        annotator = AnnotatorAgent()
             logging.info("AnnotatorAgent inicializado com sucesso.")
         except Exception as e_annotator_init:
             logging.error(f"Erro ao inicializar AnnotatorAgent: {e_annotator_init}. Anotação será pulada.", exc_info=True)
@@ -488,83 +488,40 @@ def run_pipeline(
     # --- Lógica de Busca de Chunks Pendentes no Supabase ---
     all_chunks_to_process: List[Dict[str, Any]] = []
     try:
-        # Log modificado para refletir a busca por 'error' (para teste)
-        logger.info(f"[DIAGNÓSTICO] Buscando chunks com annotation_status='error' no Supabase (batch_size={batch_size})...")
+        # Log modificado para refletir a busca GERAL (para teste)
+        logger.info(f"[DIAGNÓSTICO GERAL] Buscando os primeiros {batch_size} documentos da tabela...")
         # Busca direta, sem retry aqui. O retry está nas operações internas.
         response = supabase.table("documents") \
-            .select("document_id, content, metadata, annotation_status, indexing_status, keep, annotation_tags, annotated_at, indexed_at") \
-            .eq("annotation_status", "error") \
+            .select("document_id, annotation_status, metadata") \
             .limit(batch_size) \
             .execute()
 
         if response.data:
             all_chunks_to_process = response.data
-            # Log modificado para refletir a busca por 'error'
-            logger.info(f"[DIAGNÓSTICO] Encontrados {len(all_chunks_to_process)} chunks com status 'error' no Supabase para este lote.")
+            # Log modificado
+            logger.info(f"[DIAGNÓSTICO GERAL] Encontrados {len(all_chunks_to_process)} documentos. Exemplo do primeiro: ID={all_chunks_to_process[0].get('document_id')} Status={all_chunks_to_process[0].get('annotation_status')}")
+            # AQUI, PARA ESTE TESTE, NÃO VAMOS PROCESSAR, APENAS LOGAR QUE ENCONTRAMOS
+            logger.warning("[DIAGNÓSTICO GERAL] Teste bem-sucedido: A leitura da tabela funciona. O script será encerrado agora. Reverta a query para a lógica normal.")
+            return # Encerrar o script após o teste de leitura bem-sucedido
         else:
-            # Log modificado para refletir a busca por 'error'
-            logger.info("[DIAGNÓSTICO] Nenhum chunk com annotation_status='error' encontrado no Supabase. Pipeline concluído para este ciclo de diagnóstico.")
+            # Log modificado
+            logger.info("[DIAGNÓSTICO GERAL] Nenhum documento encontrado na tabela (inesperado). Pipeline concluído para este ciclo de diagnóstico.")
             # Se não há chunks, termina a execução deste ciclo. O Railway reiniciará se configurado.
             end_time_pipeline = time.time()
-            logging.info(f"Pipeline ETL (Modo Consulta Supabase) concluído (sem chunks 'error' encontrados) em {end_time_pipeline - start_time_pipeline:.2f} segundos.")
+            logging.info(f"Pipeline ETL (Modo Consulta Supabase) concluído (sem documentos encontrados) em {end_time_pipeline - start_time_pipeline:.2f} segundos.")
             return # Termina a execução normal deste ciclo de diagnóstico
 
     except PostgrestAPIError as api_error:
         # Log modificado
-        logger.error(f"[DIAGNÓSTICO] Erro da API Postgrest ao buscar chunks 'error' no Supabase: {api_error}", exc_info=True)
+        logger.error(f"[DIAGNÓSTICO GERAL] Erro da API Postgrest ao buscar documentos: {api_error}", exc_info=True)
         return # Não continuar se não conseguir buscar chunks
     except Exception as e:
         # Log modificado
-        logger.error(f"[DIAGNÓSTICO] Erro inesperado ao buscar chunks 'error' no Supabase: {e}", exc_info=True)
+        logger.error(f"[DIAGNÓSTICO GERAL] Erro inesperado ao buscar documentos: {e}", exc_info=True)
         return # Não continuar se não conseguir buscar chunks
 
+    # O código abaixo NÃO será executado neste modo de diagnóstico
     # --- Processamento em Paralelo dos Chunks ---
-    total_chunks_in_batch = len(all_chunks_to_process)
-    chunks_processed_count = 0
-    successful_chunks = 0
-    failed_chunks = 0
-    start_time_batch = time.time() # Tempo de início do processamento do lote
-
-    with ThreadPoolExecutor(max_workers=max_workers_pipeline) as executor:
-        # Mapeia future para document_id para logging
-        futures = {
-                executor.submit(
-                process_single_chunk,
-                chunk_data=chunk,
-                annotator=annotator,
-                r2r_client_instance=r2r_client,
-                supabase_client=supabase,
-                skip_annotation=skip_annotation,
-                skip_indexing=skip_indexing
-            ): chunk.get('document_id', f'Unknown_ID_at_submit_{i}')
-            for i, chunk in enumerate(all_chunks_to_process)
-        }
-
-        for future in as_completed(futures):
-            chunks_processed_count += 1
-            chunk_id_from_map = futures[future] # Pega o ID que mapeamos
-            progress = (chunks_processed_count / total_chunks_in_batch) * 100 if total_chunks_in_batch > 0 else 0
-
-            try:
-                # future.result() retorna o booleano de process_single_chunk
-                # ou lança a exceção se ocorreu erro não capturado internamente
-                success = future.result()
-                if success:
-                    successful_chunks += 1
-                    # Log menos verboso aqui, o log detalhado está em process_single_chunk
-                    # logger.debug(f"[run_pipeline loop] Chunk {chunk_id_from_map} completou com sucesso. Progresso: {progress:.2f}%")
-                else:
-                    failed_chunks += 1
-                    logging.warning(f"[run_pipeline loop] Processamento do chunk {chunk_id_from_map} FALHOU (retornou False). Progresso: {progress:.2f}%")
-            except Exception as exc:
-                failed_chunks += 1
-                # Logar a exceção que veio do future (pode ser de retry ou outra)
-                logging.error(f"[run_pipeline loop] Exceção ao processar chunk {chunk_id_from_map}: {exc}. Progresso: {progress:.2f}%", exc_info=False) # exc_info=False aqui
-
-    end_time_batch = time.time()
-    logger.info(f"Processamento do lote de {total_chunks_in_batch} chunks concluído em {end_time_batch - start_time_batch:.2f} segundos. Sucesso: {successful_chunks}, Falha: {failed_chunks}.")
-    end_time_pipeline = time.time()
-    logging.info(f"Ciclo completo do pipeline ETL (Modo Consulta Supabase) concluído em {end_time_pipeline - start_time_pipeline:.2f} segundos.")
 
 
 def main():
@@ -581,9 +538,9 @@ def main():
                 f"skip_annotation={args.skip_annotation}, skip_indexing={args.skip_indexing}, "
                 f"batch_size={args.batch_size}, max_workers={args.max_workers}")
 
-    run_pipeline(
-        skip_annotation=args.skip_annotation,
-        skip_indexing=args.skip_indexing,
+        run_pipeline(
+            skip_annotation=args.skip_annotation,
+            skip_indexing=args.skip_indexing,
         batch_size=args.batch_size,
         max_workers_pipeline=args.max_workers
     )
