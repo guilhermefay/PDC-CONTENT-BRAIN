@@ -488,29 +488,34 @@ def run_pipeline(
     # --- Lógica de Busca de Chunks Pendentes no Supabase ---
     all_chunks_to_process: List[Dict[str, Any]] = []
     try:
-        logger.info(f"Buscando chunks com annotation_status='pending' no Supabase (batch_size={batch_size})...")
+        # Log modificado para refletir a busca por 'error' (para teste)
+        logger.info(f"[DIAGNÓSTICO] Buscando chunks com annotation_status='error' no Supabase (batch_size={batch_size})...")
         # Busca direta, sem retry aqui. O retry está nas operações internas.
-        response = supabase.table("documents")\
-            .select("document_id, content, metadata, annotation_status, indexing_status, keep, annotation_tags, annotated_at, indexed_at")\
-            .eq("annotation_status", "pending")\
-            .limit(batch_size)\
+        response = supabase.table("documents") \
+            .select("document_id, content, metadata, annotation_status, indexing_status, keep, annotation_tags, annotated_at, indexed_at") \
+            .eq("annotation_status", "error") \
+            .limit(batch_size) \
             .execute()
 
         if response.data:
             all_chunks_to_process = response.data
-            logger.info(f"Encontrados {len(all_chunks_to_process)} chunks pendentes no Supabase para este lote.")
+            # Log modificado para refletir a busca por 'error'
+            logger.info(f"[DIAGNÓSTICO] Encontrados {len(all_chunks_to_process)} chunks com status 'error' no Supabase para este lote.")
         else:
-            logger.info("Nenhum chunk com annotation_status='pending' encontrado no Supabase. Pipeline concluído para este ciclo.")
+            # Log modificado para refletir a busca por 'error'
+            logger.info("[DIAGNÓSTICO] Nenhum chunk com annotation_status='error' encontrado no Supabase. Pipeline concluído para este ciclo de diagnóstico.")
             # Se não há chunks, termina a execução deste ciclo. O Railway reiniciará se configurado.
             end_time_pipeline = time.time()
-            logging.info(f"Pipeline ETL (Modo Consulta Supabase) concluído (sem chunks pendentes) em {end_time_pipeline - start_time_pipeline:.2f} segundos.")
-            return # Termina a execução normal deste ciclo
+            logging.info(f"Pipeline ETL (Modo Consulta Supabase) concluído (sem chunks 'error' encontrados) em {end_time_pipeline - start_time_pipeline:.2f} segundos.")
+            return # Termina a execução normal deste ciclo de diagnóstico
 
     except PostgrestAPIError as api_error:
-        logger.error(f"Erro da API Postgrest ao buscar chunks pendentes no Supabase: {api_error}", exc_info=True)
+        # Log modificado
+        logger.error(f"[DIAGNÓSTICO] Erro da API Postgrest ao buscar chunks 'error' no Supabase: {api_error}", exc_info=True)
         return # Não continuar se não conseguir buscar chunks
     except Exception as e:
-        logger.error(f"Erro inesperado ao buscar chunks pendentes no Supabase: {e}", exc_info=True)
+        # Log modificado
+        logger.error(f"[DIAGNÓSTICO] Erro inesperado ao buscar chunks 'error' no Supabase: {e}", exc_info=True)
         return # Não continuar se não conseguir buscar chunks
 
     # --- Processamento em Paralelo dos Chunks ---
