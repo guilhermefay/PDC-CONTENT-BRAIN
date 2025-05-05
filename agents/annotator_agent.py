@@ -154,132 +154,129 @@ class AnnotatorAgent(BaseAgent):
                                    agora atualizados com as chaves 'keep', 'tags' e 'reason'.
         """
         approved = []
-        # O BATCH_SIZE aqui controla apenas o log/agrupamento externo, não o envio ao LLM.
-        # O kickoff do CrewAI processa um item por vez conforme a estrutura atual.
-        for i in range(0, len(chunks), BATCH_SIZE):
-            subset = chunks[i:i + BATCH_SIZE]
-            logger.info(f"Processando lote de anotação: {i+1}-{min(i+len(subset), len(chunks))}/{len(chunks)}")
+        logger.info(f"Iniciando processamento de anotação para {len(chunks)} chunks.") # Log inicial
 
-            for j, original_chunk_dict in enumerate(subset):
-                # === LOG ADICIONAL: Início do processamento do chunk ===
-                current_chunk_index = i + j
-                chunk_meta_orig = original_chunk_dict.get("metadata", {}) # Pegar metadados originais
-                # --- APLICAR SANITIZAÇÃO AQUI --- 
-                chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
-                # ----------------------------------
-                source_filename_log = chunk_meta_sanitized.get('source_filename', 'N/A') # Usar metadados sanitizados para log
-                chunk_index_log = chunk_meta_sanitized.get('chunk_index', 'N/A')
-                logger.debug(f"[Agent Run - {current_chunk_index}] Iniciando processamento para: {source_filename_log} - chunk {chunk_index_log}")
+        # Remover o loop externo de batching, processar um por um
+        for idx, original_chunk_dict in enumerate(chunks):
+            # === LOG ADICIONAL: Início do processamento do chunk ===
+            current_chunk_index = idx # Usar o índice direto
+            chunk_meta_orig = original_chunk_dict.get("metadata", {}) # Pegar metadados originais
+            # --- APLICAR SANITIZAÇÃO AQUI --- 
+            chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
+            # ----------------------------------
+            source_filename_log = chunk_meta_sanitized.get('source_filename', 'N/A') # Usar metadados sanitizados para log
+            chunk_index_log = chunk_meta_sanitized.get('chunk_index', 'N/A')
+            logger.debug(f"[Agent Run - {current_chunk_index}] Iniciando processamento para: {source_filename_log} - chunk {chunk_index_log}")
 
-                if not original_chunk_dict or not original_chunk_dict.get("content"):
-                    logger.warning(f"[Agent Run - {current_chunk_index}] Chunk inválido ou vazio encontrado. Pulando.")
-                    continue
+            if not original_chunk_dict or not original_chunk_dict.get("content"):
+                logger.warning(f"[Agent Run - {current_chunk_index}] Chunk inválido ou vazio encontrado. Pulando.")
+                continue
 
-                # Preparar os dados de entrada para a task (dicionário Python)
-                chunk_content = original_chunk_dict["content"]
-                # === LOG ADICIONAL: Verificar tipos nos metadados SANITIZADOS ===
-                meta_to_log = chunk_meta_sanitized # <--- Usar metadados sanitizados aqui
-                logger.debug(f"[Agent Run - {current_chunk_index}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in meta_to_log.items()}}")
-                # Usar get para evitar KeyError e logar se chave não existe
-                origin = meta_to_log.get("origin", None)
-                source_filename = meta_to_log.get("source_filename", None)
-                chunk_index = meta_to_log.get("chunk_index", None) # Agora deve ser string se era slice
-                duration_sec = meta_to_log.get("duration_sec", None)
-                # Log específico se chunk_index ainda for slice (não deveria acontecer)
-                if isinstance(chunk_index, slice):
-                    logger.critical(f"[Agent Run - {current_chunk_index}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização: {chunk_index}.")
+            # Preparar os dados de entrada para a task (dicionário Python)
+            chunk_content = original_chunk_dict["content"]
+            # === LOG ADICIONAL: Verificar tipos nos metadados SANITIZADOS ===
+            meta_to_log = chunk_meta_sanitized # <--- Usar metadados sanitizados aqui
+            logger.debug(f"[Agent Run - {current_chunk_index}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in meta_to_log.items()}}")
+            # Usar get para evitar KeyError e logar se chave não existe
+            origin = meta_to_log.get("origin", None)
+            source_filename = meta_to_log.get("source_filename", None)
+            chunk_index = meta_to_log.get("chunk_index", None) # Agora deve ser string se era slice
+            duration_sec = meta_to_log.get("duration_sec", None)
+            # Log específico se chunk_index ainda for slice (não deveria acontecer)
+            if isinstance(chunk_index, slice):
+                logger.critical(f"[Agent Run - {current_chunk_index}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização: {chunk_index}.")
 
-                # CRIA task_input_dict usando metadados JÁ SANITIZADOS
-                chunk_meta_final_for_task = {
-                    "origin": origin,
-                    "source_filename": source_filename,
-                    "chunk_index": chunk_index,
-                    "duration_sec": duration_sec
-                }
-                # Usar um ID temporário consistente (0) para o LLM comparar na saída
-                expected_temp_id = 0
-                task_input_dict = {
-                    "temp_id": expected_temp_id,
-                    "content": chunk_content[:MAX_CHARS],
-                    "meta": chunk_meta_final_for_task # <--- Passa metadados JÁ SANITIZADOS para a task
-                }
-                # === LOG ADICIONAL: Input para o CrewAI ===
-                # Cuidado ao logar 'content' inteiro se for muito grande
-                loggable_input = task_input_dict.copy()
-                loggable_input["content"] = loggable_input["content"][:100] + "..." # Logar apenas início do conteúdo
-                logger.debug(f"[Agent Run - {current_chunk_index}] Input para crew.kickoff (sanitizado): {loggable_input}")
+            # CRIA task_input_dict usando metadados JÁ SANITIZADOS
+            chunk_meta_final_for_task = {
+                "origin": origin,
+                "source_filename": source_filename,
+                "chunk_index": chunk_index,
+                "duration_sec": duration_sec
+            }
+            # Usar um ID temporário consistente (0) para o LLM comparar na saída
+            expected_temp_id = 0
+            task_input_dict = {
+                "temp_id": expected_temp_id,
+                "content": chunk_content[:MAX_CHARS],
+                "meta": chunk_meta_final_for_task # <--- Passa metadados JÁ SANITIZADOS para a task
+            }
+            # === LOG ADICIONAL: Input para o CrewAI ===
+            # Cuidado ao logar 'content' inteiro se for muito grande
+            loggable_input = task_input_dict.copy()
+            loggable_input["content"] = loggable_input["content"][:100] + "..." # Logar apenas início do conteúdo
+            logger.debug(f"[Agent Run - {current_chunk_index}] Input para crew.kickoff (sanitizado): {loggable_input}")
 
-                # --- LOG DETALHADO ANTES DO KICKOFF ---
-                try:
-                    meta_types_before_kickoff = {k: type(v).__name__ for k, v in task_input_dict.get("meta", {}).items()}
-                    logger.info(f"[Agent Run - {current_chunk_index}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
-                    # Logar o valor específico de chunk_index se existir
-                    if "chunk_index" in task_input_dict.get("meta", {}):
-                         logger.info(f"[Agent Run - {current_chunk_index}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
-                except Exception as log_exc:
-                     logger.error(f"[Agent Run - {current_chunk_index}] Erro ao tentar logar tipos antes do kickoff: {log_exc}")
-                # --- FIM DO LOG DETALHADO ---
+            # --- LOG DETALHADO ANTES DO KICKOFF ---
+            try:
+                meta_types_before_kickoff = {k: type(v).__name__ for k, v in task_input_dict.get("meta", {}).items()}
+                logger.info(f"[Agent Run - {current_chunk_index}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
+                # Logar o valor específico de chunk_index se existir
+                if "chunk_index" in task_input_dict.get("meta", {}):
+                     logger.info(f"[Agent Run - {current_chunk_index}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
+            except Exception as log_exc:
+                 logger.error(f"[Agent Run - {current_chunk_index}] Erro ao tentar logar tipos antes do kickoff: {log_exc}")
+            # --- FIM DO LOG DETALHADO ---
 
-                crew_output_result = None # Inicializar fora do try
-                annotation_result: Optional[ChunkOut] = None # Inicializar fora do try
+            crew_output_result = None # Inicializar fora do try
+            annotation_result: Optional[ChunkOut] = None # Inicializar fora do try
 
-                try:
-                    # Chamar o CrewAI.
-                    # Espera-se que o kickoff retorne um objeto CrewOutput
-                    logger.debug(f"[Agent Run - {current_chunk_index}] Chamando crew.kickoff...")
-                    crew_output_result = self.crew.kickoff(inputs=task_input_dict)
-                    # === LOG ADICIONAL: Resultado bruto do CrewAI ===
-                    logger.debug(f"[Agent Run - {current_chunk_index}] Resultado bruto do crew.kickoff: {crew_output_result}")
-                    logger.debug(f"[Agent Run - {current_chunk_index}] Tipo do resultado bruto: {type(crew_output_result).__name__}")
+            try:
+                # Chamar o CrewAI.
+                # Espera-se que o kickoff retorne um objeto CrewOutput
+                logger.debug(f"[Agent Run - {current_chunk_index}] Chamando crew.kickoff...")
+                crew_output_result = self.crew.kickoff(inputs=task_input_dict)
+                # === LOG ADICIONAL: Resultado bruto do CrewAI ===
+                logger.debug(f"[Agent Run - {current_chunk_index}] Resultado bruto do crew.kickoff: {crew_output_result}")
+                logger.debug(f"[Agent Run - {current_chunk_index}] Tipo do resultado bruto: {type(crew_output_result).__name__}")
 
-                    # Extrair o resultado Pydantic (ChunkOut) do CrewOutput
-                    logger.debug(f"[Agent Run - {current_chunk_index}] Tentando extrair ChunkOut do resultado...")
-                    if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
-                        annotation_result = crew_output_result.pydantic
-                        logger.debug(f"[Agent Run - {current_chunk_index}] ChunkOut extraído com sucesso: {annotation_result}")
-                    else:
-                        # Log detalhado se a estrutura for inesperada
-                        logger.error(f"[Agent Run - {current_chunk_index}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado recebido: {crew_output_result}")
-                        if crew_output_result and hasattr(crew_output_result, '__dict__'):
-                            logger.debug(f"[Agent Run - {current_chunk_index}] Atributos do CrewOutput: {crew_output_result.__dict__}")
-                        # Continuar para o próximo chunk se não puder extrair
-                        logger.warning(f"[Agent Run - {current_chunk_index}] Pulando para o próximo chunk devido à falha na extração do ChunkOut.")
-                        continue # << IMPORTANTE: Pular para o próximo chunk se a extração falhar
+                # Extrair o resultado Pydantic (ChunkOut) do CrewOutput
+                logger.debug(f"[Agent Run - {current_chunk_index}] Tentando extrair ChunkOut do resultado...")
+                if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
+                    annotation_result = crew_output_result.pydantic
+                    logger.debug(f"[Agent Run - {current_chunk_index}] ChunkOut extraído com sucesso: {annotation_result}")
+                else:
+                    # Log detalhado se a estrutura for inesperada
+                    logger.error(f"[Agent Run - {current_chunk_index}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado recebido: {crew_output_result}")
+                    if crew_output_result and hasattr(crew_output_result, '__dict__'):
+                        logger.debug(f"[Agent Run - {current_chunk_index}] Atributos do CrewOutput: {crew_output_result.__dict__}")
+                    # Continuar para o próximo chunk se não puder extrair
+                    logger.warning(f"[Agent Run - {current_chunk_index}] Pulando para o próximo chunk devido à falha na extração do ChunkOut.")
+                    continue # << IMPORTANTE: Pular para o próximo chunk se a extração falhar
 
-                    # *** O restante da lógica agora usa annotation_result (que é ChunkOut ou None) ***
-                    # A verificação if annotation_result agora acontece implicitamente,
-                    # pois o 'continue' acima impede a execução se for None.
+                # *** O restante da lógica agora usa annotation_result (que é ChunkOut ou None) ***
+                # A verificação if annotation_result agora acontece implicitamente,
+                # pois o 'continue' acima impede a execução se for None.
 
-                    # Verificar se o temp_id retornado corresponde ao esperado (0)
-                    if annotation_result.temp_id != expected_temp_id:
-                         logger.error(f"[Agent Run - {current_chunk_index}] Erro de correspondência de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Pulando chunk {source_filename_log} index {chunk_index_log}.")
-                         continue # Pular para o próximo chunk
+                # Verificar se o temp_id retornado corresponde ao esperado (0)
+                if annotation_result.temp_id != expected_temp_id:
+                     logger.error(f"[Agent Run - {current_chunk_index}] Erro de correspondência de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Pulando chunk {source_filename_log} index {chunk_index_log}.")
+                     continue # Pular para o próximo chunk
 
-                    # Verificar se o chunk deve ser mantido
-                    if annotation_result.keep:
-                        # ATUALIZAR O DICIONÁRIO ORIGINAL com os dados da anotação
-                        original_chunk_dict.update(
-                            keep=True,
-                            tags=[t for t in annotation_result.tags if t in ALLOWED_TAGS], # Filtrar tags permitidas
-                            reason=annotation_result.reason
-                        )
-                        approved.append(original_chunk_dict) # Adicionar o dicionário original atualizado
-                        logger.debug(f"[Agent Run - {current_chunk_index}] Chunk APROVADO: {source_filename_log} index {chunk_index_log}")
-                    else:
-                         logger.debug(f"[Agent Run - {current_chunk_index}] Chunk REJEITADO: {source_filename_log} index {chunk_index_log}. Razão: {annotation_result.reason}")
+                # Verificar se o chunk deve ser mantido
+                if annotation_result.keep:
+                    # ATUALIZAR O DICIONÁRIO ORIGINAL com os dados da anotação
+                    original_chunk_dict.update(
+                        keep=True,
+                        tags=[t for t in annotation_result.tags if t in ALLOWED_TAGS], # Filtrar tags permitidas
+                        reason=annotation_result.reason
+                    )
+                    approved.append(original_chunk_dict) # Adicionar o dicionário original atualizado
+                    logger.debug(f"[Agent Run - {current_chunk_index}] Chunk APROVADO: {source_filename_log} index {chunk_index_log}")
+                else:
+                     logger.debug(f"[Agent Run - {current_chunk_index}] Chunk REJEITADO: {source_filename_log} index {chunk_index_log}. Razão: {annotation_result.reason}")
 
-                # === CAPTURA ADICIONAL: Especificamente TypeError ===
-                except TypeError as te:
-                     logger.error(f"[Agent Run - {current_chunk_index}] TypeError capturado durante processamento do chunk {source_filename_log} index {chunk_index_log}: {te}", exc_info=True)
-                     # Verificar se a mensagem de erro é a esperada
-                     if "unhashable type: 'slice'" in str(te):
-                         logger.error(f"[Agent Run - {current_chunk_index}] ERRO CONFIRMADO: 'unhashable type: slice'. Provavelmente causado por metadados inválidos (chunk_index?).")
-                     # Continuar para o próximo chunk após logar o TypeError
-                     continue
-                except Exception as e:
-                    # Logar erro geral e continuar para o próximo chunk
-                    logger.error(f"[Agent Run - {current_chunk_index}] Exceção geral capturada durante processamento do chunk {source_filename_log} index {chunk_index_log}: {e}", exc_info=True)
-                    continue # Garantir que continue para o próximo chunk em caso de erro
+            # === CAPTURA ADICIONAL: Especificamente TypeError ===
+            except TypeError as te:
+                 logger.error(f"[Agent Run - {current_chunk_index}] TypeError capturado durante processamento do chunk {source_filename_log} index {chunk_index_log}: {te}", exc_info=True)
+                 # Verificar se a mensagem de erro é a esperada
+                 if "unhashable type: 'slice'" in str(te):
+                     logger.error(f"[Agent Run - {current_chunk_index}] ERRO CONFIRMADO: 'unhashable type: slice'. Provavelmente causado por metadados inválidos (chunk_index?).")
+                 # Continuar para o próximo chunk após logar o TypeError
+                 continue
+            except Exception as e:
+                # Logar erro geral e continuar para o próximo chunk
+                logger.error(f"[Agent Run - {current_chunk_index}] Exceção geral capturada durante processamento do chunk {source_filename_log} index {chunk_index_log}: {e}", exc_info=True)
+                continue # Garantir que continue para o próximo chunk em caso de erro
 
         logger.info(f"Processamento de anotação concluído. Total de chunks aprovados: {len(approved)}")
         return approved # Retorna a lista de dicionários dos chunks originais que foram aprovados
