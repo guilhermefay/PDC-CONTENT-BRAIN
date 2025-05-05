@@ -49,7 +49,7 @@ class AnnotatorAgent(BaseAgent):
 
     Herda de `BaseAgent` (embora `BaseAgent` possa ser simples no momento).
     """
-    def __init__(self, model:str="gpt-4o", config: Optional[dict] = None):
+    def __init__(self, model:str="gpt-4o-mini", config: Optional[dict] = None):
         """
         Inicializa o AnnotatorAgent.
 
@@ -57,11 +57,11 @@ class AnnotatorAgent(BaseAgent):
         e o Crew que executará a tarefa.
 
         Args:
-            model (str): O nome do modelo LLM a ser usado (padrão: "gpt-4o").
+            model (str): O nome do modelo LLM a ser usado (padrão: "gpt-4o-mini").
             config (Optional[dict]): Dicionário de configuração adicional (atualmente não usado).
         """
         super().__init__(config) # Chama o __init__ da classe base
-        # Configurar LLM com timeout
+        # Configurar LLM com timeout, usando o modelo passado (agora default gpt-4o-mini)
         llm = ChatOpenAI(model=model, temperature=0.1, timeout=TIMEOUT) 
         
         # Definir o Agente CrewAI
