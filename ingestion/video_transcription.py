@@ -81,10 +81,17 @@ def transcribe_video_assemblyai(video_path: str) -> Optional[Dict[str, Any]]:
 
     try:
         transcriber = aai.Transcriber()
-        # Configuração opcional para melhorar a precisão ou adicionar recursos
-        # config = aai.TranscriptionConfig(speaker_labels=True, language_code="pt")
-        # transcript = transcriber.transcribe(video_path, config=config)
-        transcript = transcriber.transcribe(video_path)
+        # --- INÍCIO MODIFICAÇÃO: Adicionar configuração explícita ---
+        config = aai.TranscriptionConfig(
+            language_code="pt",  # Especificar Português
+            punctuate=True,      # Habilitar pontuação automática
+            format_text=True     # Habilitar formatação de texto (números, etc.)
+            # Adicionar outros parâmetros se desejado, e.g., speaker_labels=True
+        )
+        logger.info(f"Usando TranscriptionConfig: language_code='pt', punctuate=True, format_text=True")
+        transcript = transcriber.transcribe(video_path, config=config) # Passar a config
+        # transcript = transcriber.transcribe(video_path) # Linha original comentada
+        # --- FIM MODIFICAÇÃO ---
 
         if transcript.status == aai.TranscriptStatus.error:
             logger.error(f"Falha na transcrição AssemblyAI: {transcript.error}")
