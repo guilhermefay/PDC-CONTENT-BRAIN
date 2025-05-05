@@ -715,10 +715,10 @@ def ingest_gdrive_folder(
                     from ingestion.video_transcription import process_video
                     transcription_result = process_video(downloaded_video_path)
 
-                    if transcription_result and transcription_result.get("transcription"):
+                    if transcription_result and transcription_result.get("text"):
                         logger.info(f"   -> Transcrição concluída para {file_name}.")
                         file_data_for_chunking = {
-                            "content": transcription_result.get("transcription"),
+                            "content": transcription_result.get("text"),
                             "metadata": create_metadata(item)
                         }
                     else:
