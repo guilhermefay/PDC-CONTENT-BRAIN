@@ -258,25 +258,24 @@ def process_single_chunk(
     current_indexing_status = chunk.get("indexing_status")
     keep_chunk = chunk.get("keep") # Pode ser None, True ou False
 
-    # ---------------- Anotação ----------------
-    # Bloco 1: Verificação se deve fazer anotação
+    # ---------------- Anotação (Com updates reativados e try/except corrigido) ----------------
     if not skip_annotation and current_annotation_status in {None, "pending", "error"}:
         logger.debug(f"Chunk {doc_id}: Tentando anotação (Status atual: {current_annotation_status}).")
         
-        # Bloco 1.1: Verificar se o annotator está disponível
         if not annotator:
             logger.warning(f"Chunk {doc_id}: Annotator ausente – pulando anotação.")
             update = {"annotation_status": "skipped", "annotated_at": datetime.now(timezone.utc).isoformat()}
-            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-            logger.info(f"Chunk {doc_id}: Update Supabase (annotator ausente) SKIPPED para teste.") # Log de skip
-            current_annotation_status = "skipped" # Atualiza status local
-        
-        # Bloco 1.2: Executar anotação se annotator estiver disponível
+            _update_chunk_status_supabase(doc_id, update)
+            current_annotation_status = "skipped"
         else:
             try:
-                result = _run_annotation(annotator, chunk) # Já tem retentativa
+                logger.info(f"VERIFICANDO TIPO DE 'chunk' ANTES DE annotator.run: {type(chunk).__name__}")
+                if not isinstance(chunk, dict):
+                    logger.error(f"ERRO CRÍTICO: 'chunk' NÃO é um dicionário antes de chamar annotator.run! Valor: {chunk}")
+                    raise TypeError(f"'chunk' should be a dict, but got {type(chunk).__name__}")
                 
-                # Verificar resultado da anotação
+                result = _run_annotation(annotator, chunk)
+                
                 if result:
                     logger.info(f"Chunk {doc_id}: Anotação bem-sucedida. Keep={result.keep}, Tags={result.tags}")
                     update = {
@@ -285,37 +284,30 @@ def process_single_chunk(
                         "keep": result.keep,
                         "annotation_tags": result.tags,
                     }
-                    # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-                    logger.info(f"Chunk {doc_id}: Update Supabase (anotação OK) SKIPPED para teste.") # Log de skip
-                    keep_chunk = result.keep # Atualiza variável local para indexação
+                    _update_chunk_status_supabase(doc_id, update)
+                    keep_chunk = result.keep
                     current_annotation_status = "done"
                 else:
                     logger.warning(f"Chunk {doc_id}: Anotação retornou None. Marcando como erro.")
                     update = {"annotation_status": "error", "annotated_at": datetime.now(timezone.utc).isoformat(), "keep": False}
-                    # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-                    logger.info(f"Chunk {doc_id}: Update Supabase (anotação None) SKIPPED para teste.") # Log de skip
+                    _update_chunk_status_supabase(doc_id, update)
                     keep_chunk = False
                     current_annotation_status = "error"
             
-            # Capturar erros na execução da anotação
             except Exception as exc:
                 logger.exception(f"Chunk {doc_id}: Erro FINAL durante anotação: {exc}")
                 update = {"annotation_status": "error", "annotated_at": datetime.now(timezone.utc).isoformat(), "keep": False}
-                # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-                logger.info(f"Chunk {doc_id}: Update Supabase (erro anotação) SKIPPED para teste.") # Log de skip
+                _update_chunk_status_supabase(doc_id, update)
                 keep_chunk = False
                 current_annotation_status = "error"
     
-    # Bloco 2: Anotação pulada por flag
     elif skip_annotation:
         logger.debug(f"Chunk {doc_id}: Anotação pulada por flag.")
     
-    # Bloco 3: Anotação não necessária pelo status atual
     else:
         logger.debug(f"Chunk {doc_id}: Anotação não necessária (Status: {current_annotation_status}).")
 
-    # ---------------- Indexação ----------------
-    # Bloco 1: Verificação se deve fazer indexação
+    # ---------------- Indexação (Com updates reativados) ----------------
     if (
         not skip_indexing
         and keep_chunk is True
@@ -332,16 +324,14 @@ def process_single_chunk(
                 "indexing_status": "done",
                 "indexed_at": datetime.now(timezone.utc).isoformat(),
             }
-            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-            logger.info(f"Chunk {doc_id}: Update Supabase (indexação OK) SKIPPED para teste.") # Log de skip
+            _update_chunk_status_supabase(doc_id, update)
             current_indexing_status = "done"
         
         # Capturar erros na execução da indexação
         except Exception as exc:
             logger.exception(f"Chunk {doc_id}: Erro FINAL durante indexação: {exc}")
             update = {"indexing_status": "error", "indexed_at": datetime.now(timezone.utc).isoformat()}
-            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-            logger.info(f"Chunk {doc_id}: Update Supabase (erro indexação) SKIPPED para teste.") # Log de skip
+            _update_chunk_status_supabase(doc_id, update)
             current_indexing_status = "error"
     
     # Bloco 2: Indexação pulada por flag
@@ -350,8 +340,7 @@ def process_single_chunk(
         # Opcional: Marcar como skipped no DB se o status atual for 'pending' ou 'error'
         if current_indexing_status in {None, "pending", "error"}:
             update = {"indexing_status": "skipped"}
-            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-            logger.info(f"Chunk {doc_id}: Update Supabase (indexação skip flag) SKIPPED para teste.") # Log de skip
+            _update_chunk_status_supabase(doc_id, update)
     
     # Bloco 3: Indexação não necessária porque keep=False
     elif keep_chunk is not True:
@@ -359,8 +348,7 @@ def process_single_chunk(
         # Opcional: Marcar como skipped no DB se o status atual for 'pending' ou 'error'
         if current_indexing_status in {None, "pending", "error"}:
             update = {"indexing_status": "skipped"}
-            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
-            logger.info(f"Chunk {doc_id}: Update Supabase (indexação skip keep=False) SKIPPED para teste.") # Log de skip
+            _update_chunk_status_supabase(doc_id, update)
     
     # Bloco 4: Indexação não necessária pelo status atual
     else:
