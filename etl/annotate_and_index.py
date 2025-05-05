@@ -82,21 +82,23 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("SUPABASE_URL ou SUPABASE_SERVICE_KEY ausentes. Abortando.")
     sys.exit(1)
 
-# --- INÍCIO: Modificação para forçar Content-Type --- 
-# Define os cabeçalhos padrão para o cliente HTTPX
-default_headers = {
-    "Content-Type": "application/json",
-    "Accept": "application/json" 
-    # Outros cabeçalhos padrão que Supabase pode adicionar automaticamente
-    # serão mesclados, mas garantimos que Content-Type está correto.
-}
-
-supabase: Client = create_client(
-    SUPABASE_URL, 
-    SUPABASE_KEY,
-    options={"headers": default_headers} # Passa os cabeçalhos para httpx
-)
-# --- FIM: Modificação --- 
+# --- REVERTENDO: Voltar para a inicialização padrão --- 
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# # --- INÍCIO: Modificação para forçar Content-Type (REMOVIDA) --- 
+# # Define os cabeçalhos padrão para o cliente HTTPX
+# default_headers = {
+#     "Content-Type": "application/json",
+#     "Accept": "application/json" 
+#     # Outros cabeçalhos padrão que Supabase pode adicionar automaticamente
+#     # serão mesclados, mas garantimos que Content-Type está correto.
+# }
+# 
+# supabase: Client = create_client(
+#     SUPABASE_URL, 
+#     SUPABASE_KEY,
+#     options={"headers": default_headers} # Passa os cabeçalhos para httpx
+# )
+# # --- FIM: Modificação --- 
 
 logger.info("Supabase inicializado.")
 
@@ -257,7 +259,8 @@ def process_single_chunk(
         if not annotator:
             logger.warning(f"Chunk {doc_id}: Annotator ausente – pulando anotação.")
             update = {"annotation_status": "skipped", "annotated_at": datetime.now(timezone.utc).isoformat()}
-            _update_chunk_status_supabase(doc_id, update)
+            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+            logger.info(f"Chunk {doc_id}: Update Supabase (annotator ausente) SKIPPED para teste.") # Log de skip
             current_annotation_status = "skipped" # Atualiza status local
         
         # Bloco 1.2: Executar anotação se annotator estiver disponível
@@ -274,13 +277,15 @@ def process_single_chunk(
                         "keep": result.keep,
                         "annotation_tags": result.tags,
                     }
-                    _update_chunk_status_supabase(doc_id, update)
+                    # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+                    logger.info(f"Chunk {doc_id}: Update Supabase (anotação OK) SKIPPED para teste.") # Log de skip
                     keep_chunk = result.keep # Atualiza variável local para indexação
                     current_annotation_status = "done"
                 else:
                     logger.warning(f"Chunk {doc_id}: Anotação retornou None. Marcando como erro.")
                     update = {"annotation_status": "error", "annotated_at": datetime.now(timezone.utc).isoformat(), "keep": False}
-                    _update_chunk_status_supabase(doc_id, update)
+                    # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+                    logger.info(f"Chunk {doc_id}: Update Supabase (anotação None) SKIPPED para teste.") # Log de skip
                     keep_chunk = False
                     current_annotation_status = "error"
             
@@ -288,7 +293,8 @@ def process_single_chunk(
             except Exception as exc:
                 logger.exception(f"Chunk {doc_id}: Erro FINAL durante anotação: {exc}")
                 update = {"annotation_status": "error", "annotated_at": datetime.now(timezone.utc).isoformat(), "keep": False}
-                _update_chunk_status_supabase(doc_id, update)
+                # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+                logger.info(f"Chunk {doc_id}: Update Supabase (erro anotação) SKIPPED para teste.") # Log de skip
                 keep_chunk = False
                 current_annotation_status = "error"
     
@@ -318,14 +324,16 @@ def process_single_chunk(
                 "indexing_status": "done",
                 "indexed_at": datetime.now(timezone.utc).isoformat(),
             }
-            _update_chunk_status_supabase(doc_id, update)
+            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+            logger.info(f"Chunk {doc_id}: Update Supabase (indexação OK) SKIPPED para teste.") # Log de skip
             current_indexing_status = "done"
         
         # Capturar erros na execução da indexação
         except Exception as exc:
             logger.exception(f"Chunk {doc_id}: Erro FINAL durante indexação: {exc}")
             update = {"indexing_status": "error", "indexed_at": datetime.now(timezone.utc).isoformat()}
-            _update_chunk_status_supabase(doc_id, update)
+            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+            logger.info(f"Chunk {doc_id}: Update Supabase (erro indexação) SKIPPED para teste.") # Log de skip
             current_indexing_status = "error"
     
     # Bloco 2: Indexação pulada por flag
@@ -334,7 +342,8 @@ def process_single_chunk(
         # Opcional: Marcar como skipped no DB se o status atual for 'pending' ou 'error'
         if current_indexing_status in {None, "pending", "error"}:
             update = {"indexing_status": "skipped"}
-            _update_chunk_status_supabase(doc_id, update)
+            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+            logger.info(f"Chunk {doc_id}: Update Supabase (indexação skip flag) SKIPPED para teste.") # Log de skip
     
     # Bloco 3: Indexação não necessária porque keep=False
     elif keep_chunk is not True:
@@ -342,7 +351,8 @@ def process_single_chunk(
         # Opcional: Marcar como skipped no DB se o status atual for 'pending' ou 'error'
         if current_indexing_status in {None, "pending", "error"}:
             update = {"indexing_status": "skipped"}
-            _update_chunk_status_supabase(doc_id, update)
+            # _update_chunk_status_supabase(doc_id, update) # <<< COMENTADO PARA TESTE
+            logger.info(f"Chunk {doc_id}: Update Supabase (indexação skip keep=False) SKIPPED para teste.") # Log de skip
     
     # Bloco 4: Indexação não necessária pelo status atual
     else:
