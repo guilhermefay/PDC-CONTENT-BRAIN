@@ -134,152 +134,108 @@ class AnnotatorAgent(BaseAgent):
         )
         self.crew = Crew(agents=[analyst], tasks=[self.task], process=Process.sequential, verbose=0)
 
-    def run(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def run(self, original_chunk_dict: Dict[str, Any]) -> Optional[ChunkOut]:
         """
-        Processa uma lista de chunks (dicionários), chama o CrewAI para cada um
-        e retorna uma lista de dicionários dos chunks que foram APROVADOS.
-
-        Itera sobre os chunks de entrada, prepara o input para a task CrewAI,
-        executa a task, valida a saída (ChunkOut) e atualiza o dicionário
-        original do chunk com os resultados da anotação se `keep=True`.
+        Processa UM ÚNICO chunk (dicionário), chama o CrewAI 
+        e retorna o resultado da anotação (ChunkOut) ou None se falhar.
 
         Args:
-            chunks (List[Dict[str, Any]]): Uma lista de dicionários, onde cada
-                dicionário representa um chunk e deve conter pelo menos a chave 'content'
-                e opcionalmente 'metadata'.
+            original_chunk_dict (Dict[str, Any]): O dicionário do chunk a ser processado,
+                                                 contendo pelo menos 'content' e opcionalmente 'metadata'.
 
         Returns:
-            List[Dict[str, Any]]: Uma lista contendo apenas os dicionários dos chunks
-                                   originais que foram marcados com `keep=True` pelo agente,
-                                   agora atualizados com as chaves 'keep', 'tags' e 'reason'.
+            Optional[ChunkOut]: O objeto ChunkOut com a anotação se bem-sucedido, ou None.
         """
-        approved = []
-        logger.info(f"Iniciando processamento de anotação para {len(chunks)} chunks.") # Log inicial
+        # === Usar ID do chunk diretamente para logs (se disponível) ===
+        doc_id_log = original_chunk_dict.get("document_id", "ID Desconhecido")
+        logger.debug(f"[Agent Run] Iniciando processamento para: {doc_id_log}")
 
-        # Remover o loop externo de batching, processar um por um
-        for idx, original_chunk_dict in enumerate(chunks):
-            # === LOG ADICIONAL: Início do processamento do chunk ===
-            current_chunk_index = idx # Usar o índice direto
-            chunk_meta_orig = original_chunk_dict.get("metadata", {}) # Pegar metadados originais
-            # --- APLICAR SANITIZAÇÃO AQUI --- 
-            chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
-            # ----------------------------------
-            source_filename_log = chunk_meta_sanitized.get('source_filename', 'N/A') # Usar metadados sanitizados para log
-            chunk_index_log = chunk_meta_sanitized.get('chunk_index', 'N/A')
-            logger.debug(f"[Agent Run - {current_chunk_index}] Iniciando processamento para: {source_filename_log} - chunk {chunk_index_log}")
+        # === Manter validação do chunk individual ===
+        if not original_chunk_dict or not original_chunk_dict.get("content"):
+            logger.warning(f"[Agent Run - {doc_id_log}] Chunk inválido ou vazio encontrado. Retornando None.")
+            return None # << RETORNAR None para chunk inválido
 
-            if not original_chunk_dict or not original_chunk_dict.get("content"):
-                logger.warning(f"[Agent Run - {current_chunk_index}] Chunk inválido ou vazio encontrado. Pulando.")
-                continue
+        # === Manter preparação do input para a task ===
+        # Pegar metadados originais
+        chunk_meta_orig = original_chunk_dict.get("metadata", {}) 
+        # Aplicar sanitização
+        chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
+        
+        logger.debug(f"[Agent Run - {doc_id_log}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in chunk_meta_sanitized.items()}}")
+        origin = chunk_meta_sanitized.get("origin", None)
+        source_filename = chunk_meta_sanitized.get("source_filename", None)
+        chunk_index = chunk_meta_sanitized.get("chunk_index", None)
+        duration_sec = chunk_meta_sanitized.get("duration_sec", None)
+        if isinstance(chunk_index, slice):
+            logger.critical(f"[Agent Run - {doc_id_log}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização: {chunk_index}.")
 
-            # Preparar os dados de entrada para a task (dicionário Python)
-            chunk_content = original_chunk_dict["content"]
-            # === LOG ADICIONAL: Verificar tipos nos metadados SANITIZADOS ===
-            meta_to_log = chunk_meta_sanitized # <--- Usar metadados sanitizados aqui
-            logger.debug(f"[Agent Run - {current_chunk_index}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in meta_to_log.items()}}")
-            # Usar get para evitar KeyError e logar se chave não existe
-            origin = meta_to_log.get("origin", None)
-            source_filename = meta_to_log.get("source_filename", None)
-            chunk_index = meta_to_log.get("chunk_index", None) # Agora deve ser string se era slice
-            duration_sec = meta_to_log.get("duration_sec", None)
-            # Log específico se chunk_index ainda for slice (não deveria acontecer)
-            if isinstance(chunk_index, slice):
-                logger.critical(f"[Agent Run - {current_chunk_index}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização: {chunk_index}.")
+        chunk_meta_final_for_task = {
+            "origin": origin,
+            "source_filename": source_filename,
+            "chunk_index": chunk_index,
+            "duration_sec": duration_sec
+        }
+        expected_temp_id = 0
+        chunk_content = original_chunk_dict["content"]
+        task_input_dict = {
+            "temp_id": expected_temp_id,
+            "content": chunk_content[:MAX_CHARS],
+            "meta": chunk_meta_final_for_task
+        }
+        loggable_input = task_input_dict.copy()
+        loggable_input["content"] = loggable_input["content"][:100] + "..."
+        logger.debug(f"[Agent Run - {doc_id_log}] Input para crew.kickoff (sanitizado): {loggable_input}")
 
-            # CRIA task_input_dict usando metadados JÁ SANITIZADOS
-            chunk_meta_final_for_task = {
-                "origin": origin,
-                "source_filename": source_filename,
-                "chunk_index": chunk_index,
-                "duration_sec": duration_sec
-            }
-            # Usar um ID temporário consistente (0) para o LLM comparar na saída
-            expected_temp_id = 0
-            task_input_dict = {
-                "temp_id": expected_temp_id,
-                "content": chunk_content[:MAX_CHARS],
-                "meta": chunk_meta_final_for_task # <--- Passa metadados JÁ SANITIZADOS para a task
-            }
-            # === LOG ADICIONAL: Input para o CrewAI ===
-            # Cuidado ao logar 'content' inteiro se for muito grande
-            loggable_input = task_input_dict.copy()
-            loggable_input["content"] = loggable_input["content"][:100] + "..." # Logar apenas início do conteúdo
-            logger.debug(f"[Agent Run - {current_chunk_index}] Input para crew.kickoff (sanitizado): {loggable_input}")
+        # --- LOG DETALHADO ANTES DO KICKOFF (manter) ---
+        try:
+            meta_types_before_kickoff = {k: type(v).__name__ for k, v in task_input_dict.get("meta", {}).items()}
+            logger.info(f"[Agent Run - {doc_id_log}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
+            if "chunk_index" in task_input_dict.get("meta", {}):
+                 logger.info(f"[Agent Run - {doc_id_log}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
+        except Exception as log_exc:
+             logger.error(f"[Agent Run - {doc_id_log}] Erro ao tentar logar tipos antes do kickoff: {log_exc}")
+        # --- FIM DO LOG DETALHADO ---
 
-            # --- LOG DETALHADO ANTES DO KICKOFF ---
-            try:
-                meta_types_before_kickoff = {k: type(v).__name__ for k, v in task_input_dict.get("meta", {}).items()}
-                logger.info(f"[Agent Run - {current_chunk_index}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
-                # Logar o valor específico de chunk_index se existir
-                if "chunk_index" in task_input_dict.get("meta", {}):
-                     logger.info(f"[Agent Run - {current_chunk_index}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
-            except Exception as log_exc:
-                 logger.error(f"[Agent Run - {current_chunk_index}] Erro ao tentar logar tipos antes do kickoff: {log_exc}")
-            # --- FIM DO LOG DETALHADO ---
+        crew_output_result = None
+        annotation_result: Optional[ChunkOut] = None
 
-            crew_output_result = None # Inicializar fora do try
-            annotation_result: Optional[ChunkOut] = None # Inicializar fora do try
+        # === ALTERAÇÃO 3: Try/Except agora envolve a lógica do chunk individual ===
+        try:
+            logger.debug(f"[Agent Run - {doc_id_log}] Chamando crew.kickoff...")
+            crew_output_result = self.crew.kickoff(inputs=task_input_dict)
+            logger.debug(f"[Agent Run - {doc_id_log}] Resultado bruto do crew.kickoff: {crew_output_result}")
+            logger.debug(f"[Agent Run - {doc_id_log}] Tipo do resultado bruto: {type(crew_output_result).__name__}")
 
-            try:
-                # Chamar o CrewAI.
-                # Espera-se que o kickoff retorne um objeto CrewOutput
-                logger.debug(f"[Agent Run - {current_chunk_index}] Chamando crew.kickoff...")
-                crew_output_result = self.crew.kickoff(inputs=task_input_dict)
-                # === LOG ADICIONAL: Resultado bruto do CrewAI ===
-                logger.debug(f"[Agent Run - {current_chunk_index}] Resultado bruto do crew.kickoff: {crew_output_result}")
-                logger.debug(f"[Agent Run - {current_chunk_index}] Tipo do resultado bruto: {type(crew_output_result).__name__}")
-
-                # Extrair o resultado Pydantic (ChunkOut) do CrewOutput
-                logger.debug(f"[Agent Run - {current_chunk_index}] Tentando extrair ChunkOut do resultado...")
-                if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
-                    annotation_result = crew_output_result.pydantic
-                    logger.debug(f"[Agent Run - {current_chunk_index}] ChunkOut extraído com sucesso: {annotation_result}")
-                else:
-                    # Log detalhado se a estrutura for inesperada
-                    logger.error(f"[Agent Run - {current_chunk_index}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado recebido: {crew_output_result}")
-                    if crew_output_result and hasattr(crew_output_result, '__dict__'):
-                        logger.debug(f"[Agent Run - {current_chunk_index}] Atributos do CrewOutput: {crew_output_result.__dict__}")
-                    # Continuar para o próximo chunk se não puder extrair
-                    logger.warning(f"[Agent Run - {current_chunk_index}] Pulando para o próximo chunk devido à falha na extração do ChunkOut.")
-                    continue # << IMPORTANTE: Pular para o próximo chunk se a extração falhar
-
-                # *** O restante da lógica agora usa annotation_result (que é ChunkOut ou None) ***
-                # A verificação if annotation_result agora acontece implicitamente,
-                # pois o 'continue' acima impede a execução se for None.
-
-                # Verificar se o temp_id retornado corresponde ao esperado (0)
+            logger.debug(f"[Agent Run - {doc_id_log}] Tentando extrair ChunkOut do resultado...")
+            if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
+                annotation_result = crew_output_result.pydantic
+                logger.debug(f"[Agent Run - {doc_id_log}] ChunkOut extraído com sucesso: {annotation_result}")
+                
+                # Validar temp_id
                 if annotation_result.temp_id != expected_temp_id:
-                     logger.error(f"[Agent Run - {current_chunk_index}] Erro de correspondência de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Pulando chunk {source_filename_log} index {chunk_index_log}.")
-                     continue # Pular para o próximo chunk
+                    logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Retornando None.")
+                    return None # << RETORNAR None em caso de ID incorreto
+                
+                # Validar tags
+                invalid_tags = {tag for tag in annotation_result.tags if tag not in ALLOWED_TAGS}
+                if invalid_tags:
+                    logger.warning(f"[Agent Run - {doc_id_log}] Tags inválidas encontradas: {invalid_tags}. Removendo-as.")
+                    annotation_result.tags = [tag for tag in annotation_result.tags if tag in ALLOWED_TAGS]
+                
+                # === ALTERAÇÃO 4: Retornar o ChunkOut se tudo OK ===
+                logger.info(f"[Agent Run - {doc_id_log}] Anotação bem-sucedida.")
+                return annotation_result
 
-                # Verificar se o chunk deve ser mantido
-                if annotation_result.keep:
-                    # ATUALIZAR O DICIONÁRIO ORIGINAL com os dados da anotação
-                    original_chunk_dict.update(
-                        keep=True,
-                        tags=[t for t in annotation_result.tags if t in ALLOWED_TAGS], # Filtrar tags permitidas
-                        reason=annotation_result.reason
-                    )
-                    approved.append(original_chunk_dict) # Adicionar o dicionário original atualizado
-                    logger.debug(f"[Agent Run - {current_chunk_index}] Chunk APROVADO: {source_filename_log} index {chunk_index_log}")
-                else:
-                     logger.debug(f"[Agent Run - {current_chunk_index}] Chunk REJEITADO: {source_filename_log} index {chunk_index_log}. Razão: {annotation_result.reason}")
+            else:
+                logger.error(f"[Agent Run - {doc_id_log}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado: {crew_output_result}")
+                if crew_output_result and hasattr(crew_output_result, '__dict__'):
+                    logger.debug(f"[Agent Run - {doc_id_log}] Atributos do CrewOutput: {crew_output_result.__dict__}")
+                return None # << RETORNAR None se extração falhar
 
-            # === CAPTURA ADICIONAL: Especificamente TypeError ===
-            except TypeError as te:
-                 logger.error(f"[Agent Run - {current_chunk_index}] TypeError capturado durante processamento do chunk {source_filename_log} index {chunk_index_log}: {te}", exc_info=True)
-                 # Verificar se a mensagem de erro é a esperada
-                 if "unhashable type: 'slice'" in str(te):
-                     logger.error(f"[Agent Run - {current_chunk_index}] ERRO CONFIRMADO: 'unhashable type: slice'. Provavelmente causado por metadados inválidos (chunk_index?).")
-                 # Continuar para o próximo chunk após logar o TypeError
-                 continue
-            except Exception as e:
-                # Logar erro geral e continuar para o próximo chunk
-                logger.error(f"[Agent Run - {current_chunk_index}] Exceção geral capturada durante processamento do chunk {source_filename_log} index {chunk_index_log}: {e}", exc_info=True)
-                continue # Garantir que continue para o próximo chunk em caso de erro
-
-        logger.info(f"Processamento de anotação concluído. Total de chunks aprovados: {len(approved)}")
-        return approved # Retorna a lista de dicionários dos chunks originais que foram aprovados
+        # === Manter tratamento de exceções ===
+        except Exception as e:
+            logger.exception(f"[Agent Run - {doc_id_log}] Exceção inesperada durante crew.kickoff ou processamento: {e}")
+            return None # << RETORNAR None em caso de exceção
 
 # Exemplo de uso (para teste inicial)
 if __name__ == "__main__":
