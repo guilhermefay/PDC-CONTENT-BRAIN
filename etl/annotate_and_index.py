@@ -82,7 +82,22 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("SUPABASE_URL ou SUPABASE_SERVICE_KEY ausentes. Abortando.")
     sys.exit(1)
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# --- INÍCIO: Modificação para forçar Content-Type --- 
+# Define os cabeçalhos padrão para o cliente HTTPX
+default_headers = {
+    "Content-Type": "application/json",
+    "Accept": "application/json" 
+    # Outros cabeçalhos padrão que Supabase pode adicionar automaticamente
+    # serão mesclados, mas garantimos que Content-Type está correto.
+}
+
+supabase: Client = create_client(
+    SUPABASE_URL, 
+    SUPABASE_KEY,
+    options={"headers": default_headers} # Passa os cabeçalhos para httpx
+)
+# --- FIM: Modificação --- 
+
 logger.info("Supabase inicializado.")
 
 try:
