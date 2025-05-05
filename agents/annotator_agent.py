@@ -12,6 +12,33 @@ from crewai.crews.crew_output import CrewOutput
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
 logger = logging.getLogger(__name__)
 
+# --- INÍCIO: Copiar função _sanitize_metadata --- 
+def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Converte valores não‑hasháveis (ex.: slice) em string recursivamente."""
+    if not meta or not isinstance(meta, dict):
+        return {} if meta is None else meta
+        
+    clean: Dict[str, Any] = {}
+    for k, v in meta.items():
+        if isinstance(v, slice):
+            clean[k] = str(v)
+        elif isinstance(v, dict):
+            clean[k] = _sanitize_metadata(v) # Chamada recursiva para dicionários aninhados
+        elif isinstance(v, list):
+             # Processa listas recursivamente (caso contenham dicts ou slices)
+             clean[k] = [_sanitize_metadata(item) if isinstance(item, dict) 
+                         else str(item) if isinstance(item, slice) 
+                         else item for item in v]
+        else:
+            # Mantém outros tipos hasheáveis como estão
+            try:
+                hash(v) # Verifica se é hasheável
+                clean[k] = v
+            except TypeError:
+                clean[k] = str(v) # Converte para string se não for hasheável
+    return clean
+# --- FIM: Copiar função _sanitize_metadata --- 
+
 # load_dotenv(); # Pode ser redundante se já carregado pelo ETL
 
 class Tag(str, Enum):
@@ -136,9 +163,12 @@ class AnnotatorAgent(BaseAgent):
             for j, original_chunk_dict in enumerate(subset):
                 # === LOG ADICIONAL: Início do processamento do chunk ===
                 current_chunk_index = i + j
-                chunk_meta_log = original_chunk_dict.get("metadata", {}) # Pegar metadados para log
-                source_filename_log = chunk_meta_log.get('source_filename', 'N/A')
-                chunk_index_log = chunk_meta_log.get('chunk_index', 'N/A')
+                chunk_meta_orig = original_chunk_dict.get("metadata", {}) # Pegar metadados originais
+                # --- APLICAR SANITIZAÇÃO AQUI --- 
+                chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
+                # ----------------------------------
+                source_filename_log = chunk_meta_sanitized.get('source_filename', 'N/A') # Usar metadados sanitizados para log
+                chunk_index_log = chunk_meta_sanitized.get('chunk_index', 'N/A')
                 logger.debug(f"[Agent Run - {current_chunk_index}] Iniciando processamento para: {source_filename_log} - chunk {chunk_index_log}")
 
                 if not original_chunk_dict or not original_chunk_dict.get("content"):
@@ -147,19 +177,20 @@ class AnnotatorAgent(BaseAgent):
 
                 # Preparar os dados de entrada para a task (dicionário Python)
                 chunk_content = original_chunk_dict["content"]
-                # === LOG ADICIONAL: Verificar tipos nos metadados antes de criar chunk_meta ===
-                meta_to_log = original_chunk_dict.get("metadata", {})
-                logger.debug(f"[Agent Run - {current_chunk_index}] Tipos nos metadados originais: {{k: type(v).__name__ for k, v in meta_to_log.items()}}")
+                # === LOG ADICIONAL: Verificar tipos nos metadados SANITIZADOS ===
+                meta_to_log = chunk_meta_sanitized # <--- Usar metadados sanitizados aqui
+                logger.debug(f"[Agent Run - {current_chunk_index}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in meta_to_log.items()}}")
                 # Usar get para evitar KeyError e logar se chave não existe
                 origin = meta_to_log.get("origin", None)
                 source_filename = meta_to_log.get("source_filename", None)
-                chunk_index = meta_to_log.get("chunk_index", None) # O suspeito principal
+                chunk_index = meta_to_log.get("chunk_index", None) # Agora deve ser string se era slice
                 duration_sec = meta_to_log.get("duration_sec", None)
-                # Log específico se chunk_index for slice
+                # Log específico se chunk_index ainda for slice (não deveria acontecer)
                 if isinstance(chunk_index, slice):
-                    logger.error(f"[Agent Run - {current_chunk_index}] ALERTA! 'chunk_index' é um objeto slice: {chunk_index}. Isso causará o erro 'unhashable type: slice'.")
+                    logger.critical(f"[Agent Run - {current_chunk_index}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização: {chunk_index}.")
 
-                chunk_meta = {
+                # CRIA task_input_dict usando metadados JÁ SANITIZADOS
+                chunk_meta_final_for_task = {
                     "origin": origin,
                     "source_filename": source_filename,
                     "chunk_index": chunk_index,
@@ -170,13 +201,13 @@ class AnnotatorAgent(BaseAgent):
                 task_input_dict = {
                     "temp_id": expected_temp_id,
                     "content": chunk_content[:MAX_CHARS],
-                    "meta": chunk_meta # Incluir metadados pode dar contexto ao LLM
+                    "meta": chunk_meta_final_for_task # <--- Passa metadados JÁ SANITIZADOS para a task
                 }
                 # === LOG ADICIONAL: Input para o CrewAI ===
                 # Cuidado ao logar 'content' inteiro se for muito grande
                 loggable_input = task_input_dict.copy()
                 loggable_input["content"] = loggable_input["content"][:100] + "..." # Logar apenas início do conteúdo
-                logger.debug(f"[Agent Run - {current_chunk_index}] Input para crew.kickoff: {loggable_input}")
+                logger.debug(f"[Agent Run - {current_chunk_index}] Input para crew.kickoff (sanitizado): {loggable_input}")
 
                 crew_output_result = None # Inicializar fora do try
                 annotation_result: Optional[ChunkOut] = None # Inicializar fora do try
