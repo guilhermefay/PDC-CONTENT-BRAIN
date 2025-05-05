@@ -354,23 +354,33 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
             skip_annotation = True # Força o skip se não conseguir inicializar
 
     # Filtro para buscar chunks pendentes ou com erro em qualquer uma das etapas
-    filter_expr = (
-        "or=("
-        "annotation_status.eq.pending,annotation_status.eq.error,"
-        "indexing_status.eq.pending,indexing_status.eq.error,"
-        "annotation_status.is.null,indexing_status.is.null" # Inclui chunks nunca processados
-        ")"
-    )
+    # --- CORREÇÃO: Usar .or() em vez de .filter() com string complexa ---
+    # filter_expr = (
+    #     "or=("
+    #     "annotation_status.eq.pending,annotation_status.eq.error,"
+    #     "indexing_status.eq.pending,indexing_status.eq.error,"
+    #     "annotation_status.is.null,indexing_status.is.null" # Inclui chunks nunca processados
+    #     ")"
+    # )
 
     try:
-        logger.info(f"Buscando até {batch_size} chunks com filtro: {filter_expr}")
-        resp = (
-            supabase.table("documents")
-            .select("*") # Busca todos os campos necessários para processamento
-            .filter(filter_expr)
-            .limit(batch_size)
-            .execute()
+        logger.info(f"Buscando até {batch_size} chunks pendentes ou com erro...")
+        query = supabase.table("documents").select("*") # Começa a query
+
+        # Aplica o filtro OR
+        query = query.or_(
+            "annotation_status.eq.pending," 
+            "annotation_status.eq.error," 
+            "indexing_status.eq.pending," 
+            "indexing_status.eq.error," 
+            "annotation_status.is.null," 
+            "indexing_status.is.null"
         )
+        
+        # Limita e executa
+        resp = query.limit(batch_size).execute()
+        # --- FIM DA CORREÇÃO ---
+        
         chunks: List[Dict[str, Any]] = resp.data or []
     except Exception as e_fetch:
         logger.error(f"Erro ao buscar chunks do Supabase: {e_fetch}", exc_info=True)
