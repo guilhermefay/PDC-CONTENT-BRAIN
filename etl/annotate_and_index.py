@@ -293,10 +293,11 @@ def process_single_chunk(
         and current_indexing_status in {None, "pending", "error"}
     ):
         logger.debug(f"Chunk {doc_id}: Tentando indexação (Keep={keep_chunk}, Status atual: {current_indexing_status}).")
-        
-        # Executar indexação
         try:
-            _upload_chunk_r2r(chunk) # Já tem retentativa e checagem de r2r_client
+            # === COMENTAR TEMPORARIAMENTE PARA TESTE ===
+            # _upload_chunk_r2r(chunk) # Já tem retentativa e checagem de r2r_client
+            logger.warning(f"Chunk {doc_id}: Upload R2R comentado para teste.") # Log temporário
+            # === FIM DO COMENTÁRIO ===
             logger.info(f"Chunk {doc_id}: Indexação bem-sucedida.")
             update = {
                 "indexing_status": "done",
