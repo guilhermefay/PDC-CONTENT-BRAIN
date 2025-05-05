@@ -240,41 +240,31 @@ def _run_annotator_with_retry(annotator: AnnotatorAgent, chunk_data: Dict[str, A
 
 @default_retry
 def _upload_single_chunk_to_r2r_with_retry(r2r_client_instance: R2RClientWrapper, chunk_content: str, document_id: str, metadata: Dict[str, Any]):
-    """Faz upload para R2R de um chunk (conteúdo direto) com retentativas."""
-    logger.debug(f"[R2R Upload Retry] Tentando upload para doc_id: {document_id}")
-    temp_file_path = None
+    """Função auxiliar para fazer upload de um único chunk para R2R com retentativas."""
+    if not r2r_client_instance:
+        logger.warning(f"[R2R Upload] R2R client instance not available. Skipping upload for doc_id {document_id}.")
+        return False
+
+    # Garantir que metadata sempre tenha 'document_id' e 'source'
+    metadata['document_id'] = document_id # Usar o ID do chunk como ID do documento no R2R
+    # Garantir que 'source' exista, mesmo que vazio, para evitar KeyErrors
+    metadata.setdefault('source', 'unknown')
+
+    logger.debug(f"[R2R Upload] Tentando fazer upload do chunk {document_id} para R2R.")
     try:
-        # Cria arquivo temporário para o conteúdo do chunk
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".txt", encoding='utf-8') as temp_file:
-            temp_file.write(chunk_content)
-            temp_file_path = temp_file.name
-        logging.debug(f"Conteúdo do chunk {document_id} salvo em arquivo temporário: {temp_file_path}")
-
-        result = r2r_client_instance.upload_file(
-            file_path=temp_file_path,
-            document_id=document_id, # Usar o ID do chunk como ID do documento no R2R
-            metadata=metadata
+        # O ID do documento no R2R será o mesmo document_id do chunk no Supabase
+        r2r_client_instance.upload_and_process_file(
+            document_id=document_id, # Usar o ID do chunk
+            blob=chunk_content.encode('utf-8'), # Enviar o conteúdo do chunk como bytes
+            metadata=metadata,
+            settings={} # Pode adicionar configurações específicas se necessário
         )
-        logger.debug(f"[R2R Upload Retry] Resultado para doc_id {document_id}: {result}")
-        # Limpar arquivo temporário APENAS em caso de sucesso
-        if temp_file_path and os.path.exists(temp_file_path):
-             try:
-                  os.remove(temp_file_path)
-                  logging.debug(f"Arquivo temporário {temp_file_path} removido após sucesso.")
-             except OSError as e_remove:
-                  logging.warning(f"Não foi possível remover o arquivo temporário {temp_file_path} após sucesso: {e_remove}")
-        return result # Retorna o dicionário de resultado
-
+        logger.info(f"[R2R Upload] Upload do chunk {document_id} para R2R bem-sucedido.")
+        return True
     except Exception as e:
-         logger.error(f"[R2R Upload Retry] Erro FINAL no upload para doc_id {document_id} após retentativas: {e}", exc_info=False)
-         # Limpar arquivo temporário em caso de ERRO também
-         if temp_file_path and os.path.exists(temp_file_path):
-              try:
-                   os.remove(temp_file_path)
-                   logging.debug(f"Arquivo temporário {temp_file_path} removido após falha.")
-              except OSError as e_remove:
-                   logging.warning(f"Não foi possível remover o arquivo temporário {temp_file_path} após falha: {e_remove}")
-         raise # Re-lançar para que a retentativa externa funcione
+        # Usar exc_info=True para logar o traceback completo
+        logger.error(f"[R2R Upload] Falha no upload do chunk {document_id} para R2R: {e}", exc_info=True)
+        return False
 
 def process_single_chunk(
     chunk_data: Dict[str, Any],
@@ -312,74 +302,93 @@ def process_single_chunk(
     #     return True # Considera sucesso pular algo já feito
 
     try:
-        # --- Etapa 1: Anotação (se não pulada) ---
-        if not skip_annotation:
-            if annotator:
-                try:
-                    annotated_result: Optional[ChunkOut] = _run_annotator_with_retry(annotator, chunk_data, source_name)
-
-                    if annotated_result:
-                        # Atualizar variáveis com resultado da anotação
-                        annotation_tags = annotated_result.tags
-                        keep_chunk = annotated_result.keep
-                        annotation_reason = annotated_result.reason # Captura a razão
-                        annotation_status = 'done' # Sucesso na anotação
-                        annotated_at = datetime.now(timezone.utc).isoformat()
-                        logger.info(f"Chunk {document_id} (Idx: {chunk_index}) anotado. Keep: {keep_chunk}, Tags: {annotation_tags}, Reason: {annotation_reason}")
-
-                    else:
-                        # Caso _run_annotator_with_retry retorne None (ex: falha interna do agente)
-                        logger.warning(f"Anotação retornou None para chunk {document_id} (Idx: {chunk_index}). Marcando como erro.")
-                        annotation_status = 'error'
-                        keep_chunk = False # Não manter em caso de erro
-                        annotated_at = datetime.now(timezone.utc).isoformat()
-                        annotation_reason = "Annotator returned None"
-
-                except Exception as e_annotate:
-                    # Captura exceção final após retries de _run_annotator_with_retry
-                    logger.error(f"Erro FINAL na anotação do chunk {document_id} (Idx: {chunk_index}): {e_annotate}", exc_info=False) # exc_info=False para não poluir tanto
-                    annotation_status = 'error'
-                    keep_chunk = False # Não manter se a anotação falhou
-                    annotated_at = datetime.now(timezone.utc).isoformat()
-                    annotation_reason = f"Annotation failed after retries: {e_annotate}"
-
-                # ---- ATUALIZAÇÃO NO SUPABASE PÓS-ANOTAÇÃO (SUCESSO OU FALHA) ----
-                annotation_update_payload = {
+        # --- Etapa 1: Anotação (se não pulada e pendente) ---
+        if not skip_annotation and annotation_status == 'pending':
+            if not annotator:
+                logger.warning(f"Annotator não disponível. Pulando anotação para chunk {document_id}.")
+                annotation_status = 'skipped' # Marcar como pulado se o anotador não existe
+                keep_chunk = None # Não podemos decidir sem o anotador
+                annotated_at = datetime.now(timezone.utc).isoformat()
+                # Atualizar Supabase imediatamente para refletir o skip
+                annotation_skip_update = {
                     "annotation_status": annotation_status,
                     "annotated_at": annotated_at,
-                    "keep": keep_chunk,
-                    "annotation_tags": annotation_tags,
-                    "annotation_reason": annotation_reason # Inclui a razão
+                    "keep": keep_chunk # Salvar None explicitamente
                 }
+                if not _update_chunk_status_supabase(supabase_client, document_id, annotation_skip_update, "save/update chunk annotation skipped"):
+                    logger.warning(f"Falha ao atualizar status de anotação pulada para chunk {document_id}.")
+
+            else:
+                logger.debug(f"Enviando chunk {document_id} para anotação...")
                 try:
-                    if not _update_chunk_status_supabase(supabase_client, document_id, annotation_update_payload, "update annotation status"):
-                        logger.error(f"FALHA CRÍTICA ao atualizar status da anotação para chunk {document_id}. Dados podem ficar inconsistentes.")
-                        # Decidir se isso deve parar o processo do chunk? Por ora, continua para indexação.
-                except Exception as e_update_anno:
-                    logger.error(f"Exceção CRÍTICA ao tentar atualizar status da anotação para chunk {document_id}: {e_update_anno}", exc_info=True)
-                    # Continuar mesmo assim? Por ora, sim.
+                    # Executar anotação com retentativas
+                    annotated_chunk = _run_annotator_with_retry(annotator, chunk_data, source_name)
 
-            else: # Se annotator não foi inicializado
-                logging.warning(f"AnnotatorAgent não inicializado, pulando anotação para chunk {document_id}.")
-                annotation_status = 'skipped'
-                # Manter keep_chunk com seu valor inicial (default True ou do DB)
-                # Não precisa atualizar DB aqui, pois status já é 'skipped' ou será atualizado pela indexação
-        else: # Se skip_annotation=True
-            logging.info(f"Anotação pulada via flag para chunk {document_id}.")
-            annotation_status = 'skipped'
-            # Manter keep_chunk com seu valor inicial
+                    if annotated_chunk:
+                        annotation_tags = annotated_chunk.tags
+                        keep_chunk = annotated_chunk.keep
+                        annotation_status = 'done'
+                        annotated_at = datetime.now(timezone.utc).isoformat()
+                        logger.info(f"Chunk {document_id} anotado. Tags: {annotation_tags}, Keep: {keep_chunk}")
 
-        # --- Etapa 2: Indexação (se não pulada E keep=True RESULTANTE DA ANOTAÇÃO) ---
+                        # ---- CORREÇÃO AQUI ----
+                        # Construir payload COMPLETO para atualização da anotação
+                        annotation_status_update = {
+                            "annotation_status": annotation_status,
+                            "annotated_at": annotated_at,
+                            "keep": keep_chunk,
+                            "annotation_tags": annotation_tags,
+                            # Podemos adicionar reason se quisermos/tivermos a coluna
+                            # "annotation_reason": annotated_chunk.reason
+                        }
+                        # Chamar update com o payload correto
+                        if not _update_chunk_status_supabase(supabase_client, document_id, annotation_status_update, "save/update chunk annotation"):
+                            logger.warning(f"Falha ao atualizar status da anotação para chunk {document_id}. Prosseguindo...")
+                            # Decidir se quer parar ou continuar se o update falhar
+
+                    else:
+                        # Caso annotator.run retorne None ou algo inesperado
+                        logger.warning(f"Anotação retornou resultado inesperado para chunk {document_id}. Marcando como erro.")
+                        annotation_status = 'error'
+                        keep_chunk = False # Default para não manter em caso de erro
+                        annotated_at = datetime.now(timezone.utc).isoformat()
+                        # ---- CORREÇÃO AQUI TAMBÉM ----
+                        annotation_status_update = {
+                             "annotation_status": annotation_status,
+                             "annotated_at": annotated_at,
+                             "keep": keep_chunk,
+                             # Talvez adicionar uma razão de erro?
+                        }
+                        if not _update_chunk_status_supabase(supabase_client, document_id, annotation_status_update, "save/update chunk annotation error"):
+                             logger.warning(f"Falha ao atualizar status de erro da anotação para chunk {document_id}.")
+
+                except Exception as e_annotate:
+                    # Log completo do erro de anotação
+                    logger.error(f"Erro durante a anotação do chunk {document_id}: {e_annotate}", exc_info=True) # Log completo
+                    annotation_status = 'error'
+                    keep_chunk = False
+                    annotated_at = datetime.now(timezone.utc).isoformat()
+                    # ---- CORREÇÃO AQUI TAMBÉM ----
+                    annotation_status_update = {
+                         "annotation_status": annotation_status,
+                         "annotated_at": annotated_at,
+                         "keep": keep_chunk,
+                         # Talvez adicionar uma razão de erro?
+                    }
+                    if not _update_chunk_status_supabase(supabase_client, document_id, annotation_status_update, "save/update chunk annotation exception"):
+                         logger.warning(f"Falha ao atualizar status de erro (exceção) da anotação para chunk {document_id}.")
+
+        # --- Etapa 2: Indexação (se não pulada E keep=True E pendente) ---
         indexing_status = 'skipped' # Default se keep=False ou skip_indexing=True
         indexed_at = None
 
-        if not skip_indexing and keep_chunk: # USA O VALOR DE keep_chunk DEFINIDO ACIMA
-            logging.debug(f"[process_single_chunk] Indexando chunk {document_id} (Idx: {chunk_index}) no R2R...")
-            if r2r_client_instance:
+        if not skip_indexing and keep_chunk is True and indexing_status == 'pending':
+            logger.debug(f"Chunk {document_id} marcado como keep=True. Tentando indexar no R2R...")
+            if r2r_client:
                 try:
                     # A função de upload agora lida com o arquivo temporário
                     _upload_single_chunk_to_r2r_with_retry(
-                        r2r_client_instance,
+                        r2r_client,
                         chunk_data["content"], # Passa o conteúdo diretamente
                         document_id,
                         chunk_data["metadata"] # Passa os metadados atuais
@@ -514,7 +523,7 @@ def run_pipeline(
     with ThreadPoolExecutor(max_workers=max_workers_pipeline) as executor:
         # Mapeia future para document_id para logging
         futures = {
-            executor.submit(
+                executor.submit(
                 process_single_chunk,
                 chunk_data=chunk,
                 annotator=annotator,
@@ -543,9 +552,9 @@ def run_pipeline(
                     failed_chunks += 1
                     logging.warning(f"[run_pipeline loop] Processamento do chunk {chunk_id_from_map} FALHOU (retornou False). Progresso: {progress:.2f}%")
             except Exception as exc:
-                 failed_chunks += 1
-                 # Logar a exceção que veio do future (pode ser de retry ou outra)
-                 logging.error(f"[run_pipeline loop] Exceção ao processar chunk {chunk_id_from_map}: {exc}. Progresso: {progress:.2f}%", exc_info=False) # exc_info=False aqui
+                failed_chunks += 1
+                # Logar a exceção que veio do future (pode ser de retry ou outra)
+                logging.error(f"[run_pipeline loop] Exceção ao processar chunk {chunk_id_from_map}: {exc}. Progresso: {progress:.2f}%", exc_info=False) # exc_info=False aqui
 
     end_time_batch = time.time()
     logger.info(f"Processamento do lote de {total_chunks_in_batch} chunks concluído em {end_time_batch - start_time_batch:.2f} segundos. Sucesso: {successful_chunks}, Falha: {failed_chunks}.")
