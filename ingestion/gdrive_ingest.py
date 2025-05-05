@@ -33,6 +33,7 @@ from ingestion.image_processor import ImageProcessor
 from supabase import create_client, Client, PostgrestAPIResponse
 from postgrest.exceptions import APIError as PostgrestAPIError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import base64
 
 # Configurar logger
 logger = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ VIDEO_MIME_TYPES = {
     'video/webm'
 }
 GDRIVE_EXPORT_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' # Exportar GDoc como DOCX
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly'] # Definir escopos aqui
 
 # --- Constantes de Filtragem ---
 IGNORED_FILENAMES = {
@@ -301,35 +303,65 @@ def _insert_initial_chunks_supabase(supabase_cli: Client, batch: List[Dict[str, 
 def authenticate_gdrive():
     """Autentica na API do Google Drive usando credenciais de Service Account.
 
-    Lê o caminho para o arquivo JSON de credenciais da variável de ambiente
-    `GOOGLE_SERVICE_ACCOUNT_JSON`.
+    Prioriza o uso do conteúdo JSON da variável de ambiente
+    `GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64`. Como fallback, tenta usar
+    o caminho do arquivo especificado em `GOOGLE_SERVICE_ACCOUNT_JSON`.
 
     Returns:
         googleapiclient.discovery.Resource: Um objeto de serviço autorizado da API
                                             do Google Drive (v3).
 
     Raises:
-        ValueError: Se a variável de ambiente `GOOGLE_SERVICE_ACCOUNT_JSON` não
-                    estiver definida ou o arquivo não for encontrado.
+        ValueError: Se nenhuma credencial válida for encontrada.
         googleapiclient.errors.HttpError: Se ocorrer um erro durante a autenticação.
         Exception: Para outros erros inesperados.
     """
-    creds_path = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
-    if not creds_path or not os.path.exists(creds_path):
-        logger.error("Caminho para GOOGLE_SERVICE_ACCOUNT_JSON não definido ou inválido.")
-        raise ValueError("Caminho para GOOGLE_SERVICE_ACCOUNT_JSON não definido ou inválido.")
+    creds = None
+    # --- INÍCIO DA MODIFICAÇÃO ---
+    creds_content_b64 = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64')
+    
+    if creds_content_b64:
+        try:
+            logger.info("Tentando autenticar usando GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64...")
+            creds_content_json = base64.b64decode(creds_content_b64).decode('utf-8')
+            credentials_dict = json.loads(creds_content_json)
+            creds = service_account.Credentials.from_service_account_info(info=credentials_dict, scopes=SCOPES)
+            logger.info("Autenticação via conteúdo JSON (Base64) bem-sucedida.")
+        except Exception as e:
+            logger.warning(f"Falha ao usar GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64: {e}. Tentando fallback via caminho...")
+            creds = None # Garante que tentaremos o fallback
 
-    scopes = ['https://www.googleapis.com/auth/drive.readonly']
+    # Fallback: Tentar usar o caminho do arquivo se o conteúdo falhar ou não existir
+    if not creds:
+        creds_path = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
+        if creds_path and os.path.exists(creds_path):
+            try:
+                logger.info(f"Tentando autenticar usando GOOGLE_SERVICE_ACCOUNT_JSON (caminho: {creds_path})...")
+                creds = service_account.Credentials.from_service_account_file(creds_path, scopes=SCOPES)
+                logger.info("Autenticação via caminho do arquivo JSON bem-sucedida.")
+            except Exception as e:
+                logger.error(f"Falha ao autenticar usando o caminho {creds_path}: {e}")
+                creds = None # Marca como falha
+        else:
+            logger.warning("Variável GOOGLE_SERVICE_ACCOUNT_JSON (caminho) não definida ou inválida.")
+    
+    # Se nenhuma credencial foi carregada com sucesso
+    if not creds:
+        error_msg = "Falha ao autenticar com Google Drive. Nenhuma credencial válida encontrada (via conteúdo Base64 ou caminho)."
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    # --- FIM DA MODIFICAÇÃO ---
+        
     try:
-        creds = service_account.Credentials.from_service_account_file(creds_path, scopes=scopes)
+        # Construir o serviço usando as credenciais obtidas (creds)
         service = build('drive', 'v3', credentials=creds)
-        logger.info("Autenticação com Google Drive bem-sucedida.")
+        logger.info("Serviço Google Drive API construído com sucesso.")
         return service
     except HttpError as auth_error:
-        logger.error(f"Erro HTTP durante autenticação com Google Drive: {auth_error}")
+        logger.error(f"Erro HTTP durante a construção do serviço Google Drive: {auth_error}")
         raise
     except Exception as e:
-        logger.error(f"Erro inesperado durante autenticação com Google Drive: {e}", exc_info=True)
+        logger.error(f"Erro inesperado durante a construção do serviço Google Drive: {e}", exc_info=True)
         raise
 
 def export_and_download_gdoc(service, file_id, export_mime_type):
