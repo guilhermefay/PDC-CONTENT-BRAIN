@@ -1,58 +1,26 @@
-# Força rebuild para novo CMD do ETL
-# Use an official Python runtime as a parent image
+# Use a imagem oficial do Python como base
 FROM python:3.11-slim
 
-# Argumento para quebrar o cache. Mude o valor se precisar forçar rebuild.
-# Comentado pois não estava funcionando confiavelmente.
-# ARG CACHE_BUSTER=3
+# Definir o diretório de trabalho dentro do contêiner para os arquivos da API R2R
+WORKDIR /app/R2R/py
 
-# Set environment variables to ensure libraries are found
-ENV LD_LIBRARY_PATH /usr/local/lib:$LD_LIBRARY_PATH
+# Copiar os arquivos de dependência para o diretório de trabalho.
+# Os caminhos COPY agora são relativos à raiz do contexto de build (que será a raiz do seu repositório).
+COPY ./R2R/py/requirements.txt /app/R2R/py/requirements.txt
 
-# Set the working directory in the container
-WORKDIR /app
+# Instalar as dependências.
+# --no-cache-dir para evitar armazenar em cache pacotes baixados, economizando espaço.
+# --upgrade pip garante que o pip esteja atualizado.
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Upgrade pip
-RUN pip install --upgrade pip
+# Copiar o restante do código fonte da API R2R.
+# O caminho de origem também é relativo à raiz do contexto de build.
+COPY ./R2R/py /app/R2R/py
 
-# Comando para usar o argumento e quebrar o cache
-# Comentado pois não estava funcionando confiavelmente.
-# RUN echo "Cache bust: $CACHE_BUSTER"
-
-# Instalar ffmpeg robustamente...
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg libavcodec-dev libavformat-dev libswscale-dev && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-# Argumento removido - arquivo será criado no runtime
-# ARG GOOGLE_CREDS_JSON_CONTENT
-
-# Etapa RUN removida - arquivo será criado no runtime
-# RUN echo "$GOOGLE_CREDS_JSON_CONTENT" > /app/gcp_creds.json
-
-# Definir variável de ambiente para que o script Python encontre o arquivo
-# O arquivo /app/gcp_creds.json será criado pelo Custom Start Command
-ENV GOOGLE_SERVICE_ACCOUNT_JSON=/app/gcp_creds.json
-
-# Copy the requirements file into the container at /app
-COPY requirements.txt /app/
-
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the entire project into the container
-COPY . /app
-
-# Copy the entrypoint script into the container
-COPY entrypoint.sh .
-COPY normalize_json.py .
-
-# Make port 8000 available (opcional, mas inofensivo)
+# Expor a porta que a aplicação R2R usa.
 EXPOSE 8000
 
-# Define o ponto de entrada para executar o módulo ETL com python3
-ENTRYPOINT ["python3", "-m", "etl.annotate_and_index"]
-
-# Não definir CMD também, deixar o Start Command do Railway controlar # Comentário antigo, remover?
-# Não definir CMD. ENTRYPOINT lida com tudo. 
+# Definir o comando para iniciar a aplicação R2R.
+# Usamos gunicorn para servir a aplicação FastAPI.
+CMD ["gunicorn", "main:app", "--workers", "1", "--timeout", "120", "--bind", "0.0.0.0:8000", "--chdir", "/app/R2R/py"] 
