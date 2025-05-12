@@ -30,4 +30,6 @@ RUN ls -la /app
 
 # Definir o comando para iniciar a aplicação do worker.
 # O WORKDIR /app garante que ingestion.gdrive_ingest seja importável.
-# CMD ["python", "-m", "ingestion.gdrive_ingest"] 
+
+# ENTRYPOINT para manter o contêiner ativo para debug
+ENTRYPOINT ["tail", "-f", "/dev/null"] 
