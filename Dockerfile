@@ -4,22 +4,24 @@ FROM python:3.11-slim
 # Define o diretório de trabalho dentro do contêiner
 WORKDIR /app
 
-# Copia os arquivos de requisitos e instala as dependências
+# Copia o arquivo de requisitos e instala as dependências
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia os diretórios necessários para a aplicação API
-COPY api ./api
-COPY infra ./infra
-
-# --- Debug steps ---
-# Listar o conteúdo do diretório de trabalho /app após copiar os arquivos
+# Copia os diretórios necessários para o worker da raiz do repositório para /app no contêiner
+# Adiciona comandos de debug para listar o conteúdo de /app após cada cópia
+COPY ingestion ./ingestion
 RUN ls -la /app
-# --- End Debug steps ---
+COPY etl ./etl
+RUN ls -la /app
+COPY infra ./infra
+RUN ls -la /app
 
-# Comando para iniciar o servidor Gunicorn
-# Temporariamente comentado para debug
-# CMD ["gunicorn", "api.rag_api:app", "--workers", "4", "--bind", "0.0.0.0:7860", "--worker-class", "uvicorn.workers.UvicornWorker"]
+# Remove o comando CMD de start para usar um ENTRYPOINT de debug
+# O ENTRYPOINT manterá o contêiner rodando para inspeção, permitindo ver os logs de build e o ambiente interno.
+# Revertemos para o CMD de start normal após o debug.
+# CMD ["python", "-m", "ingestion.gdrive_ingest"]
+ENTRYPOINT ["tail", "-f", "/dev/null"]
 
-# ENTRYPOINT para manter o contêiner ativo para debug de inspeção manual
-ENTRYPOINT ["tail", "-f", "/dev/null"] 
+# O comando de start real será configurado no Railway UI para "python -m ingestion.gdrive_ingest"
+# O Root Directory do serviço no Railway DEVE ser configurado para /
