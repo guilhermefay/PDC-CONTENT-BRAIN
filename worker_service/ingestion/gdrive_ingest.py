@@ -28,7 +28,7 @@ from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
 from docling.document_converter import DocumentConverter
 import tempfile
-from typing import Any, List, Dict, Optional
+from typing import Any, List, Dict, Optional, Set
 from ingestion.image_processor import ImageProcessor
 from supabase import create_client, Client, PostgrestAPIResponse
 from postgrest.exceptions import APIError as PostgrestAPIError
@@ -132,6 +132,9 @@ image_processor = ImageProcessor()
 # MAX_FILES_TO_PROCESS_TEST = 5 # <-- COMENTADO
 # ### FIM DEBUG ###
 
+# Cache de pastas processadas para evitar reprocessamento
+processed_folders: Set[str] = set()
+
 # --- INÍCIO: Código copiado/adaptado de etl/annotate_and_index.py ---
 
 # Inicializar tiktoken (usar encoding para modelos OpenAI mais recentes)
@@ -158,6 +161,104 @@ default_retry = retry(
     retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS)
 )
 # --- Fim Configuração Tenacity ---
+
+# --- NOVA FUNÇÃO: Verificar se pasta já foi processada ---
+@default_retry
+def check_folder_processed(supabase_cli: Client, folder_id: str) -> bool:
+    """
+    Verifica no Supabase se uma pasta já foi completamente processada.
+    Tenta verificar na tabela 'processed_folders' se existe um registro para este folder_id.
+    """
+    if not supabase_cli:
+        logger.warning("Cliente Supabase não disponível para verificar pasta processada.")
+        return False
+    
+    try:
+        response = supabase_cli.table('processed_folders')\
+                          .select('folder_id', count='exact')\
+                          .eq('folder_id', folder_id)\
+                          .execute()
+        
+        is_processed = response.count > 0
+        if is_processed:
+            logger.info(f"Pasta {folder_id} encontrada como completamente processada. Pulando verificação de arquivos.")
+        return is_processed
+    except PostgrestAPIError as api_error:
+        # Se a tabela não existir, ela precisa ser criada
+        if "relation \"processed_folders\" does not exist" in str(api_error):
+            logger.warning("Tabela 'processed_folders' não existe. Será criada no próximo ciclo após processamento completo de uma pasta.")
+            return False
+        logger.error(f"Erro API ao verificar pasta processada {folder_id}: {api_error.message}", exc_info=True)
+        return False
+    except Exception as check_err:
+        logger.error(f"Erro inesperado ao verificar pasta processada {folder_id}: {check_err}", exc_info=True)
+        return False
+
+# --- NOVA FUNÇÃO: Marcar pasta como processada ---
+@default_retry
+def mark_folder_processed(supabase_cli: Client, folder_id: str, folder_name: str) -> bool:
+    """
+    Marca uma pasta como completamente processada no Supabase.
+    """
+    if not supabase_cli:
+        logger.warning("Cliente Supabase não disponível para marcar pasta como processada.")
+        return False
+    
+    try:
+        # Tentar inserir na tabela 'processed_folders'
+        # Se a tabela não existir, tenta criá-la primeiro
+        try:
+            response = supabase_cli.table('processed_folders').insert({
+                "folder_id": folder_id,
+                "folder_name": folder_name,
+                "processed_at": datetime.now(timezone.utc).isoformat()
+            }).execute()
+            
+            success = not (hasattr(response, 'error') and response.error)
+            if success:
+                logger.info(f"Pasta {folder_name} (ID: {folder_id}) marcada como completamente processada.")
+            else:
+                logger.error(f"Erro ao marcar pasta {folder_name} como processada: {response.error}")
+            return success
+        except PostgrestAPIError as api_error:
+            # Se a tabela não existir, tenta criar
+            if "relation \"processed_folders\" does not exist" in str(api_error):
+                try:
+                    # Criando tabela via SQL
+                    sql_query = """
+                    CREATE TABLE IF NOT EXISTS processed_folders (
+                        id SERIAL PRIMARY KEY,
+                        folder_id TEXT UNIQUE NOT NULL,
+                        folder_name TEXT,
+                        processed_at TIMESTAMPTZ NOT NULL
+                    );
+                    """
+                    # Executar SQL personalizado
+                    supabase_cli.postgrest.schema('public').execute(sql_query)
+                    
+                    # Tentar inserir novamente
+                    response = supabase_cli.table('processed_folders').insert({
+                        "folder_id": folder_id,
+                        "folder_name": folder_name,
+                        "processed_at": datetime.now(timezone.utc).isoformat()
+                    }).execute()
+                    
+                    success = not (hasattr(response, 'error') and response.error)
+                    if success:
+                        logger.info(f"Tabela 'processed_folders' criada e pasta {folder_name} marcada como processada.")
+                    else:
+                        logger.error(f"Erro ao marcar pasta após criar tabela: {response.error}")
+                    return success
+                except Exception as e:
+                    logger.error(f"Erro ao criar tabela 'processed_folders': {e}", exc_info=True)
+                    return False
+            else:
+                raise  # Re-levantar para outro tratamento
+    except Exception as e:
+        logger.error(f"Erro inesperado ao marcar pasta {folder_id} como processada: {e}", exc_info=True)
+        return False
+
+# --- FUNÇÕES EXISTENTES CONTINUAM ---
 
 def count_tokens(text: str) -> int:
     """Conta tokens usando o tokenizer tiktoken inicializado."""
@@ -343,8 +444,6 @@ def _insert_initial_chunks_supabase(supabase_cli: Client, batch: List[Dict[str, 
     except Exception as e:
         logger.error(f"Erro inesperado ao inserir chunks no Supabase para {source_name}: {e}", exc_info=True)
         return False
-
-# --- FIM: Código copiado/adaptado ---
 
 def authenticate_gdrive():
     """Autentica na API do Google Drive usando credenciais de Service Account.
@@ -534,6 +633,18 @@ def ingest_gdrive_folder(
     access_level: Optional[str] = None,
     current_path: str = ""
 ) -> bool:
+    # Verificar no cache de memória se a pasta já foi processada nesta execução
+    if folder_id in processed_folders:
+        logger.info(f"Pasta {folder_name} (ID: {folder_id}) já foi processada nesta execução. Pulando.")
+        return True
+    
+    # Verificar no Supabase se a pasta foi completamente processada em execuções anteriores
+    if supabase_client and check_folder_processed(supabase_client, folder_id):
+        logger.info(f"Pasta {folder_name} (ID: {folder_id}) já foi completamente processada em execução anterior. Pulando.")
+        # Adicionar ao cache em memória também
+        processed_folders.add(folder_id)
+        return True
+        
     overall_success = True
     folder_path_log = os.path.join(current_path, folder_name)
     logger.info(f"\nIniciando ingestão da pasta: {folder_path_log} (ID: {folder_id}, Access: {access_level})")
@@ -730,6 +841,17 @@ def ingest_gdrive_folder(
         elif not supabase_client:
             logger.warning("  Supabase client não configurado. Pulando salvamento de chunks e marcação de processado.")
             overall_success = False
+
+    # Ao final da função, se tudo foi bem-sucedido, marcar pasta como completamente processada
+    if overall_success and not dry_run and supabase_client:
+        mark_success = mark_folder_processed(supabase_client, folder_id, folder_name)
+        if mark_success:
+            # Adicionar ao cache em memória também
+            processed_folders.add(folder_id)
+        else:
+            # Se falhar ao marcar como processada, não afeta o resultado geral
+            logger.warning(f"Não foi possível marcar pasta {folder_name} como processada, mas os arquivos foram processados.")
+    
     logger.info(f"Ingestão da pasta {folder_path_log} concluída.")
     return overall_success
 
