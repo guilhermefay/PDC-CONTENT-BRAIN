@@ -1,27 +1,33 @@
 # Use a imagem oficial do Python como base
 FROM python:3.11-slim
 
-# Definir o diretório de trabalho dentro do contêiner para os arquivos da API R2R
-# O WORKDIR agora reflete o novo local dentro do contêiner
-WORKDIR /app/api
+# Comando temporário para debug: listar o conteúdo da raiz do contexto de build
+RUN ls -la /
 
-# Copiar os arquivos de dependência para o diretório de trabalho.
-# Os caminhos COPY agora são relativos à raiz do contexto de build (que será a raiz do seu repositório) e o novo diretório 'api'
-COPY ./api/requirements.txt /app/api/requirements.txt
+# Definir o diretório de trabalho dentro do contêiner
+WORKDIR /app
+
+# Comando temporário para debug: listar o conteúdo do diretório de trabalho /app
+RUN ls -la /app
+
+# Copiar os arquivos de dependência
+# Usando api/requirements.txt por enquanto, pois um requirements dedicado para o worker não foi encontrado.
+# O caminho COPY é relativo à raiz do contexto de build (que será worker/)
+COPY ./requirements.txt /app/requirements.txt
 
 # Instalar as dependências.
-# --no-cache-dir para evitar armazenar em cache pacotes baixados, economizando espaço.
-# --upgrade pip garante que o pip esteja atualizado.
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copiar o restante do código fonte da API R2R.
-# O caminho de origem também é relativo à raiz do contexto de build e o novo diretório 'api'
-COPY ./api/. /app/api/
+# Copiar o código fonte do worker (incluindo ingestion, etl, e infra)
+# Os caminhos COPY são relativos ao diretorio worker/
+COPY ./ingestion /app/ingestion
+COPY ./etl /app/etl
+COPY ./infra /app/infra
 
-# Expor a porta que a aplicação R2R usa.
-EXPOSE 8000
+# Comando temporário para debug: listar o conteúdo de /app
+RUN ls -la /app
 
-# Definir o comando para iniciar a aplicação R2R.
-# Usamos gunicorn para servir a aplicação FastAPI, o --chdir agora aponta para o novo diretório dentro do contêiner
-CMD ["gunicorn", "rag_api:app", "--worker-class", "uvicorn.workers.UvicornWorker", "--workers", "1", "--timeout", "120", "--bind", "0.0.0.0:8000", "--chdir", "/app/api"] 
+# Definir o comando para iniciar a aplicação do worker.
+# O WORKDIR /app garante que ingestion.gdrive_ingest seja importável.
+CMD ["python", "-m", "ingestion.gdrive_ingest"] 
