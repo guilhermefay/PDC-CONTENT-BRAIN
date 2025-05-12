@@ -12,18 +12,18 @@ RUN ls -la /app
 
 # Copiar os arquivos de dependência
 # Usando api/requirements.txt por enquanto, pois um requirements dedicado para o worker não foi encontrado.
-# O caminho COPY é relativo à raiz do contexto de build (que será worker/)
-COPY ./requirements.txt /app/requirements.txt
+# O caminho COPY é relativo à raiz do contexto de build (que é a raiz do repo)
+COPY ./worker/requirements.txt /app/requirements.txt
 
 # Instalar as dependências.
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copiar o código fonte do worker (incluindo ingestion, etl, e infra)
-# Os caminhos COPY são relativos ao diretorio worker/
-COPY ./ingestion /app/ingestion
-COPY ./etl /app/etl
-COPY ./infra /app/infra
+# Os caminhos COPY são relativos à raiz do repositório
+COPY ./worker/ingestion /app/ingestion
+COPY ./worker/etl /app/etl
+COPY ./worker/infra /app/infra
 
 # Comando temporário para debug: listar o conteúdo de /app
 RUN ls -la /app
