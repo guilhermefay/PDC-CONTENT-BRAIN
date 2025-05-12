@@ -81,17 +81,17 @@ def transcribe_video_assemblyai(video_path: str) -> Optional[Dict[str, Any]]:
 
     try:
         transcriber = aai.Transcriber()
-        # --- INÍCIO MODIFICAÇÃO: Adicionar configuração explícita ---
+        # --- Configuração explícita (voltando ao modelo padrão) ---
         config = aai.TranscriptionConfig(
             language_code="pt",  # Especificar Português
             punctuate=True,      # Habilitar pontuação automática
             format_text=True     # Habilitar formatação de texto (números, etc.)
+            # speech_model="slam-1" # Comentado/Removido
             # Adicionar outros parâmetros se desejado, e.g., speaker_labels=True
         )
-        logger.info(f"Usando TranscriptionConfig: language_code='pt', punctuate=True, format_text=True")
+        logger.info(f"Usando TranscriptionConfig: language_code='pt', punctuate=True, format_text=True") # Log sem slam-1
         transcript = transcriber.transcribe(video_path, config=config) # Passar a config
-        # transcript = transcriber.transcribe(video_path) # Linha original comentada
-        # --- FIM MODIFICAÇÃO ---
+        # --- Fim Modificação ---
 
         if transcript.status == aai.TranscriptStatus.error:
             logger.error(f"Falha na transcrição AssemblyAI: {transcript.error}")
@@ -329,9 +329,9 @@ def process_all_videos_in_directory(directory: str) -> List[Dict[str, Any]]:
              return []
 
         for filename in os.listdir(directory):
-            if filename.lower().endswith( (".mp4", ".mov", ".avi", ".mkv")):
-                video_file_path = os.path.join(directory, filename)
-                result = process_video(video_file_path)
+            if filename.lower().endswith( (".mp4", ".mov", ".avi", ".mkv", ".mp3", ".wav", ".m4a", ".flac", ".ogg")):
+                file_path = os.path.join(directory, filename)
+                result = process_video(file_path)
                 if result:
                     transcriptions.append(result)
             else:

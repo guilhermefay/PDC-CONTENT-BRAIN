@@ -34,6 +34,10 @@ from supabase import create_client, Client, PostgrestAPIResponse
 from postgrest.exceptions import APIError as PostgrestAPIError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import base64
+import re
+
+# ATENÇÃO: Indentação revisada em 2024-06-10 para corrigir erros de execução Python.
+# Se encontrar problemas de indentação, revisar este bloco!
 
 # Configurar logger
 logger = logging.getLogger(__name__)
@@ -162,84 +166,133 @@ def count_tokens(text: str) -> int:
         return len(text)
     return len(tokenizer.encode(text))
 
-def split_content_into_chunks(text: str, initial_metadata: Dict[str, Any], max_chunk_tokens: int = 800) -> List[Dict[str, Any]]:
-    """Divide o texto em chunks menores baseados na contagem de tokens.
-
-    Tenta manter parágrafos e sentenças intactos, mas pode quebrar sentenças
-    longas se necessário. Adiciona metadados a cada chunk, incluindo
-    o `chunk_index` e `document_id`.
-
-    Args:
-        text (str): O texto completo a ser dividido.
-        initial_metadata (Dict[str, Any]): Metadados originais do documento fonte,
-                                           que serão copiados para cada chunk.
-        max_chunk_tokens (int): O número máximo aproximado de tokens por chunk.
-
-    Returns:
-        List[Dict[str, Any]]: Uma lista de dicionários, onde cada um representa
-                               um chunk com `content` e `metadata` atualizado.
+def get_semantic_splits_via_llm(text, max_chunk_tokens):
     """
-    if not tokenizer:
-         logger.error("Tokenizer não disponível, não é possível fazer chunking por tokens.")
-         return []
-    if not text or not isinstance(text, str):
-        logger.warning(f"Conteúdo inválido ou vazio recebido para chunking com metadados: {initial_metadata.get('source_name', 'Desconhecido')}")
-        return []
+    (Stub) Usa LLM para sugerir offsets de chunking semântico.
+    Substitua por chamada real à API (OpenAI, Claude, etc).
+    Exemplo de prompt:
+    "Divida o texto abaixo em blocos coesos de até X tokens, sem quebrar ideias importantes. Retorne os offsets ou trechos sugeridos."
+    """
+    logger.info("[CHUNKING][IA] Chamando stub de LLM para sugerir splits (não implementado, sempre retorna None)")
+    return None
 
-    chunks_data = []
-    # Usar parágrafos como delimitadores iniciais
-    paragraphs = [p for p in text.split('\n\n') if p.strip()]
-    current_chunk_content = []
-    current_chunk_tokens = 0
-    chunk_index = 0
+def split_content_into_chunks(text, base_metadata=None, max_chunk_tokens=2048, min_chunk_chars=300, model_name=None, llm_api_key=None):
+    """
+    Divide o texto em chunks semânticos usando LLM (OpenAI GPT-4o). Fallback para chunking por parágrafo/tamanho.
+    - text: texto completo a ser chunkado
+    - base_metadata: dict com metadados do documento original (gdrive_id, source_type, etc)
+    - max_chunk_tokens: limite de tokens por chunk (default: 2048)
+    - min_chunk_chars: tamanho mínimo de chunk para evitar fragmentação excessiva
+    - model_name: nome do modelo LLM (opcional, pode usar env)
+    - llm_api_key: chave da API do LLM (opcional, pode usar env)
+    Retorna: lista de dicts {content, metadata, ...}
+    """
+    import os
+    import requests
+    import time
+    import uuid
+    import json as _json
 
-    for paragraph in paragraphs:
-        paragraph_tokens = count_tokens(paragraph)
+    logger.info(f"[CHUNKING][IA] Iniciando split_content_into_chunks (len={len(text)})...")
+    if not text or not isinstance(text, str) or len(text.strip()) < min_chunk_chars:
+        logger.warning("Texto vazio ou muito curto para chunking. Retornando chunk único.")
+        return [{
+            "content": text.strip(),
+            "metadata": {**(base_metadata or {}), "chunk_index": 0, "total_chunks_in_doc": 1, "split_type": "single_or_short"}
+        }]
 
-        # Se um único parágrafo exceder o limite, divida-o ainda mais (por sentença, etc.) - Simplificado por agora
-        if paragraph_tokens > max_chunk_tokens:
-            logger.warning(f"Parágrafo muito longo ({paragraph_tokens} tokens) em {initial_metadata.get('source_name', 'Desconhecido')}, adicionando como um chunk único. Considere pré-processamento.")
-            # Adiciona o parágrafo grande como um chunk separado, mesmo que exceda
-            if current_chunk_content: # Salva o chunk anterior se houver
-                doc_id = str(uuid.uuid4())
-                metadata_copy = initial_metadata.copy()
-                metadata_copy.update({"chunk_index": chunk_index, "document_id": doc_id})
-                chunks_data.append({"content": "\n\n".join(current_chunk_content), "metadata": metadata_copy})
-                chunk_index += 1
-                current_chunk_content = []
-                current_chunk_tokens = 0
+    # --- 1. Tentar chunking semântico via LLM (GPT-4o) ---
+    try:
+        # Preferir GPT-4o ou GPT-4o-mini
+        model = model_name or os.getenv("OPENAI_MODEL", "gpt-4o")
+        api_key = llm_api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY não definido nas variáveis de ambiente.")
 
-            # Salva o parágrafo grande
-            doc_id_large = str(uuid.uuid4())
-            metadata_copy_large = initial_metadata.copy()
-            metadata_copy_large.update({"chunk_index": chunk_index, "document_id": doc_id_large})
-            chunks_data.append({"content": paragraph, "metadata": metadata_copy_large})
-            chunk_index += 1
-            continue # Pula para o próximo parágrafo
+        # Prompt aprimorado para chunking semântico de alta qualidade
+        prompt = (
+            "Você é um assistente de NLP especialista em segmentação de texto para sistemas RAG (Retrieval-Augmented Generation).\n"
+            "Divida o texto abaixo em blocos coesos, cada um com até {max_chunk_tokens} tokens, priorizando a manutenção de contexto, coesão semântica e fluidez.\n"
+            "Evite dividir frases ou tópicos no meio.\n"
+            "Retorne uma lista JSON de pares [início, fim] (offsets de caractere) para cada chunk.\n"
+            "Evite chunks muito curtos (<{min_chunk_chars} caracteres), exceto se forem seções isoladas, títulos ou notas finais.\n"
+            "Não inclua explicações, apenas a lista JSON.\n"
+            "Texto:\n" + text[:12000]
+        ).format(max_chunk_tokens=max_chunk_tokens, min_chunk_chars=min_chunk_chars)
 
-        # Se adicionar o parágrafo atual exceder o limite, salve o chunk atual e comece um novo
-        if current_chunk_tokens + paragraph_tokens > max_chunk_tokens and current_chunk_content:
-            doc_id = str(uuid.uuid4())
-            metadata_copy = initial_metadata.copy()
-            metadata_copy.update({"chunk_index": chunk_index, "document_id": doc_id})
-            chunks_data.append({"content": "\n\n".join(current_chunk_content), "metadata": metadata_copy})
-            chunk_index += 1
-            current_chunk_content = [paragraph] # Começa novo chunk com o parágrafo atual
-            current_chunk_tokens = paragraph_tokens
+        logger.info(f"[CHUNKING][IA] Chamando OpenAI para sugerir splits (modelo={model})...")
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Você é um assistente de NLP especialista em chunking semântico para RAG."},
+                {"role": "user", "content": prompt}
+            ],
+            "max_tokens": 512,
+            "temperature": 0.1
+        }
+        response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=90)
+        if response.status_code != 200:
+            logger.warning(f"[CHUNKING][IA] Falha na chamada OpenAI: {response.status_code} {response.text}")
+            raise RuntimeError("OpenAI API error")
+        result = response.json()
+        llm_reply = result["choices"][0]["message"]["content"]
+        try:
+            offsets = _json.loads(llm_reply)
+            if not isinstance(offsets, list) or not all(isinstance(x, list) and len(x) == 2 for x in offsets):
+                raise ValueError("Formato de offsets inválido")
+        except Exception as parse_err:
+            logger.warning(f"[CHUNKING][IA] Falha ao parsear offsets do LLM: {parse_err}. Fallback para chunking por parágrafo/tamanho.")
+            offsets = None
+        if offsets:
+            logger.info(f"[CHUNKING][IA] LLM sugeriu {len(offsets)} splits.")
+            chunks = []
+            for idx, (start, end) in enumerate(offsets):
+                chunk_text = text[start:end].strip()
+                if not chunk_text:
+                    continue
+                chunk_meta = {**(base_metadata or {}),
+                              "chunk_index": idx,
+                              "total_chunks_in_doc": len(offsets),
+                              "split_type": "llm_semantic_gpt4o"}
+                chunks.append({"content": chunk_text, "metadata": chunk_meta})
+            if chunks:
+                return chunks
+    except Exception as e:
+        logger.error(f"[CHUNKING][IA] Erro ao tentar chunking via LLM: {e}. Fallback para chunking por parágrafo/tamanho.")
+        time.sleep(1)
+
+    # --- 2. Fallback: chunking por parágrafo/tamanho ---
+    logger.info("[CHUNKING][FALLBACK] Usando chunking por parágrafo/tamanho.")
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    chunks = []
+    current = ""
+    idx = 0
+    for p in paragraphs:
+        if not current:
+            current = p
+        elif count_tokens(current + "\n\n" + p) <= max_chunk_tokens:
+            current += "\n\n" + p
         else:
-            # Adiciona o parágrafo ao chunk atual
-            current_chunk_content.append(paragraph)
-            current_chunk_tokens += paragraph_tokens
-
-    # Adiciona o último chunk se houver conteúdo restante
-    if current_chunk_content:
-        doc_id = str(uuid.uuid4())
-        metadata_copy = initial_metadata.copy()
-        metadata_copy.update({"chunk_index": chunk_index, "document_id": doc_id})
-        chunks_data.append({"content": "\n\n".join(current_chunk_content), "metadata": metadata_copy})
-
-    logger.info(f"Dividido conteúdo de {initial_metadata.get('source_name', 'Desconhecido')} em {len(chunks_data)} chunks.")
-    return chunks_data
+            chunk_meta = {**(base_metadata or {}),
+                          "chunk_index": idx,
+                          "total_chunks_in_doc": None,
+                          "split_type": "fallback_paragraph_or_size"}
+            chunks.append({"content": current, "metadata": chunk_meta})
+            idx += 1
+            current = p
+    if current:
+        chunk_meta = {**(base_metadata or {}),
+                      "chunk_index": idx,
+                      "total_chunks_in_doc": None,
+                      "split_type": "fallback_paragraph_or_size"}
+        chunks.append({"content": current, "metadata": chunk_meta})
+    # Atualizar total_chunks_in_doc
+    total = len(chunks)
+    for c in chunks:
+        c["metadata"]["total_chunks_in_doc"] = total
+    logger.info(f"[CHUNKING][FALLBACK] Gerados {total} chunks por fallback.")
+    return chunks
 
 @default_retry
 def _insert_initial_chunks_supabase(supabase_cli: Client, batch: List[Dict[str, Any]], source_name: str) -> bool:
@@ -272,23 +325,16 @@ def _insert_initial_chunks_supabase(supabase_cli: Client, batch: List[Dict[str, 
         logger.info(f"Inserindo {len(records_to_insert)} chunks iniciais no Supabase para {source_name}...")
         response: PostgrestAPIResponse = supabase_cli.table('documents').insert(records_to_insert).execute()
 
-        # Verificar se houve erro na resposta da API (mesmo com status 2xx)
-        # A biblioteca supabase-py pode retornar sucesso mesmo que alguns registros falhem
-        # por constraints, etc. Uma verificação mais robusta seria ideal aqui, mas
-        # por ora confiamos na ausência de exceção e no status code geral.
-        # A resposta `response.data` contém os dados inseridos se a operação foi bem-sucedida.
         if hasattr(response, 'data') and response.data:
              logger.info(f"Sucesso: {len(response.data)} chunks inseridos para {source_name}.")
              return True
         else:
-             # Tentar logar um erro mais específico se disponível
              error_details = getattr(response, 'error', None) or getattr(response, 'message', 'Detalhes indisponíveis')
              logger.error(f"Falha ao inserir chunks para {source_name}. Resposta sem dados ou indicando erro: {error_details}")
              return False
 
     except PostgrestAPIError as api_error:
          logger.error(f"Erro da API Postgrest ao inserir chunks para {source_name}: {api_error}", exc_info=True)
-         # Tentar logar detalhes da resposta se disponíveis
          try:
              logger.error(f"Detalhes do erro Postgrest: Code={api_error.code}, Details={api_error.details}, Hint={api_error.hint}, Message={api_error.message}")
          except Exception:
@@ -317,7 +363,6 @@ def authenticate_gdrive():
         Exception: Para outros erros inesperados.
     """
     creds = None
-    # --- INÍCIO DA MODIFICAÇÃO ---
     creds_content_b64 = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64')
     
     if creds_content_b64:
@@ -329,9 +374,8 @@ def authenticate_gdrive():
             logger.info("Autenticação via conteúdo JSON (Base64) bem-sucedida.")
         except Exception as e:
             logger.warning(f"Falha ao usar GOOGLE_SERVICE_ACCOUNT_JSON_CONTENT_BASE64: {e}. Tentando fallback via caminho...")
-            creds = None # Garante que tentaremos o fallback
+            creds = None 
 
-    # Fallback: Tentar usar o caminho do arquivo se o conteúdo falhar ou não existir
     if not creds:
         creds_path = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON')
         if creds_path and os.path.exists(creds_path):
@@ -341,19 +385,16 @@ def authenticate_gdrive():
                 logger.info("Autenticação via caminho do arquivo JSON bem-sucedida.")
             except Exception as e:
                 logger.error(f"Falha ao autenticar usando o caminho {creds_path}: {e}")
-                creds = None # Marca como falha
+                creds = None 
         else:
             logger.warning("Variável GOOGLE_SERVICE_ACCOUNT_JSON (caminho) não definida ou inválida.")
     
-    # Se nenhuma credencial foi carregada com sucesso
     if not creds:
         error_msg = "Falha ao autenticar com Google Drive. Nenhuma credencial válida encontrada (via conteúdo Base64 ou caminho)."
         logger.error(error_msg)
         raise ValueError(error_msg)
-    # --- FIM DA MODIFICAÇÃO ---
         
     try:
-        # Construir o serviço usando as credenciais obtidas (creds)
         service = build('drive', 'v3', credentials=creds)
         logger.info("Serviço Google Drive API construído com sucesso.")
         return service
@@ -361,24 +402,11 @@ def authenticate_gdrive():
         logger.error(f"Erro HTTP durante a construção do serviço Google Drive: {auth_error}")
         raise
     except Exception as e:
-        logger.error(f"Erro inesperado durante a construção do serviço Google Drive: {e}", exc_info=True)
+        logger.error(f"Erro inesperado durante a construção do serviço Google Drive: {e}")
         raise
 
 def export_and_download_gdoc(service, file_id, export_mime_type):
-    """Exporta um Google Doc para um MIME type específico e baixa o conteúdo.
-
-    Usado principalmente para converter Google Docs nativos para um formato
-    processável (como DOCX) antes da extração de texto.
-
-    Args:
-        service: Objeto de serviço autorizado da API do Google Drive.
-        file_id (str): O ID do Google Doc a ser exportado.
-        export_mime_type (str): O MIME type para o qual exportar
-                                (ex: `application/vnd.openxmlformats-officedocument.wordprocessingml.document`).
-
-    Returns:
-        Optional[bytes]: O conteúdo binário do arquivo exportado, ou None se ocorrer um erro.
-    """
+    """Exporta um Google Doc para um MIME type específico e baixa o conteúdo."""
     logger.debug(f"  -> Exportando Google Doc (ID: {file_id}) para {export_mime_type}...")
     try:
         request = service.files().export_media(fileId=file_id, mimeType=export_mime_type)
@@ -402,21 +430,7 @@ def export_and_download_gdoc(service, file_id, export_mime_type):
         return None
 
 def extract_text_from_file(mime_type: str, file_content_bytes: bytes, file_name: str) -> Optional[str]:
-    """Extrai texto do conteúdo binário de um arquivo baixado.
-
-    Utiliza decodificação direta para `text/plain` (com fallback para latin-1)
-    e `Docling DocumentConverter` para DOCX e PDF.
-    Normaliza o texto extraído.
-
-    Args:
-        mime_type (str): O MIME type do arquivo original.
-        file_content_bytes (bytes): O conteúdo binário do arquivo.
-        file_name (str): O nome original do arquivo (usado para logging).
-
-    Returns:
-        Optional[str]: O texto extraído e normalizado, ou None se a extração falhar
-                       ou o tipo de arquivo não for suportado.
-    """
+    """Extrai texto do conteúdo binário de um arquivo baixado."""
     logger.debug(f"   -> Iniciando extração de texto para {file_name} ({mime_type})")
     text_content = None
     if not file_content_bytes:
@@ -424,7 +438,6 @@ def extract_text_from_file(mime_type: str, file_content_bytes: bytes, file_name:
         return None
 
     try:
-        # Caso 1: Tratar texto plano diretamente
         if mime_type == 'text/plain':
             try:
                 text_content = file_content_bytes.decode('utf-8')
@@ -434,49 +447,40 @@ def extract_text_from_file(mime_type: str, file_content_bytes: bytes, file_name:
                      text_content = file_content_bytes.decode('latin-1')
                  except Exception as decode_err:
                      logger.error(f"    -> Falha ao decodificar TXT {file_name} com latin-1: {decode_err}")
-                     text_content = None # Marcar como falha
+                     text_content = None
             except Exception as txt_err:
                 logger.error(f"    -> Erro ao processar TXT {file_name}: {txt_err}")
-                text_content = None # Marcar como falha
+                text_content = None
 
-        # Caso 2: Usar Docling DocumentConverter para outros tipos suportados (PDF, DOCX exportado)
         elif docling_converter and (mime_type == GDRIVE_EXPORT_MIME or mime_type == 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' or mime_type == 'application/pdf'):
-            temp_file_path = None # Inicializar para garantir que existe no bloco finally
+            temp_file_path = None
             try:
-                # Salvar bytes em arquivo temporário
                 with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{os.path.basename(file_name)}") as temp_input_file:
                     temp_input_file.write(file_content_bytes)
                     temp_file_path = temp_input_file.name
-
                 logger.debug(f"    -> Usando Docling DocumentConverter para {temp_file_path} (origin: {file_name})")
-                # Passar o caminho do arquivo temporário para o conversor
                 conversion_result = docling_converter.convert(temp_file_path)
-                # Extrair o texto do resultado
-                text_content = conversion_result.document.export_to_markdown() # Ajustar se necessário
+                text_content = conversion_result.document.export_to_markdown()
                 logger.debug(f"    -> Docling extraiu texto de {file_name}.")
             except Exception as docling_err:
                  logger.error(f"    -> Erro do Docling DocumentConverter ao processar {file_name}: {docling_err}", exc_info=True)
                  text_content = None
             finally:
-                 # Remover o arquivo temporário
                  if temp_file_path and os.path.exists(temp_file_path):
                      try:
                          os.remove(temp_file_path)
                      except Exception as rem_err:
                           logger.warning(f"     -> Falha ao remover arquivo temporário {temp_file_path}: {rem_err}")
-
         elif not docling_converter and mime_type != 'text/plain':
              logger.error(f"   -> Docling DocumentConverter não inicializado. Não é possível processar {file_name} ({mime_type}).")
              text_content = None
-
         else:
             logger.warning(f"   -> Tipo MIME não suportado ou Docling não aplicável: {mime_type} para {file_name}")
             text_content = None
 
-        # Normalização e limpeza final do texto extraído
         if text_content:
             text_content = unicodedata.normalize('NFKC', text_content).strip()
-            if text_content: # Verificar se não ficou vazio após strip
+            if text_content:
                  logger.debug(f"   -> Extração/Decodificação de texto bem-sucedida para {file_name}.")
                  return text_content
             else:
@@ -485,21 +489,12 @@ def extract_text_from_file(mime_type: str, file_content_bytes: bytes, file_name:
         else:
             logger.warning(f"   -> Falha na extração/decodificação de texto para {file_name}.")
             return None
-
     except Exception as e:
         logger.error(f"   -> Erro inesperado durante a extração de texto para {file_name} ({mime_type}). Arquivo pode estar corrompido ou formato não suportado corretamente. Erro: {e}", exc_info=True)
         return None
 
 def download_file(service, file_id):
-    """Baixa o conteúdo binário de um arquivo regular (não Google Doc) do Drive.
-
-    Args:
-        service: Objeto de serviço autorizado da API do Google Drive.
-        file_id (str): O ID do arquivo a ser baixado.
-
-    Returns:
-        Optional[bytes]: O conteúdo binário do arquivo, ou None se ocorrer um erro.
-    """
+    """Baixa o conteúdo binário de um arquivo regular (não Google Doc) do Drive."""
     logger.debug(f"  -> Baixando arquivo (ID: {file_id})...")
     try:
         request = service.files().get_media(fileId=file_id)
@@ -522,14 +517,11 @@ def download_file(service, file_id):
         logger.error(f"  -> Erro inesperado durante o download do arquivo {file_id}: {e}", exc_info=True)
         return None
 
-# ADICIONAL: Função para identificar arquivos de imagem suportados
 def is_supported_image(file: Dict[str, Any]) -> bool:
     mime_type = file.get('mimeType', '').lower()
     name = file.get('name', '').lower()
-    # Identificar imagens por mimeType
     if mime_type in ['image/jpeg', 'image/png', 'image/heic']:
         return True
-    # Permitir arquivos com extensão de imagem se não forem vídeos
     if name.endswith(('.jpeg', '.jpg', '.png', '.heic')) and not mime_type.startswith('video'):
         return True
     return False
@@ -542,23 +534,12 @@ def ingest_gdrive_folder(
     access_level: Optional[str] = None,
     current_path: str = ""
 ) -> bool:
-    """
-    Ingere recursivamente arquivos e pastas de uma pasta do Google Drive.
-
-    Modificado para processamento incremental e sem temp_dir_path explícito.
-    """
-    # results = [] # Removido
-    overall_success = True # Flag para rastrear sucesso
-
-    # Construir caminho para logging
+    overall_success = True
     folder_path_log = os.path.join(current_path, folder_name)
-
     logger.info(f"\nIniciando ingestão da pasta: {folder_path_log} (ID: {folder_id}, Access: {access_level})")
-
     page_token = None
     all_files_in_folder = []
 
-    # 1. Paginação: Coletar todos os itens da pasta primeiro
     while True:
         try:
             response = service.files().list(
@@ -575,56 +556,46 @@ def ingest_gdrive_folder(
             page_token = response.get('nextPageToken', None)
             if page_token is None:
                 logger.debug(f"  Fim da paginação para {folder_path_log}. Total de itens: {len(all_files_in_folder)}")
-                break # Sai do loop de paginação
+                break 
         except HttpError as error:
             logger.error(f"Erro HTTP ao listar arquivos na pasta {folder_id} ({folder_path_log}): {error}")
-            return False # Falha crítica na listagem
+            return False
         except Exception as e:
             logger.error(f"Erro inesperado ao listar arquivos na pasta {folder_id} ({folder_path_log}): {e}", exc_info=True)
-            return False # Falha crítica na listagem
+            return False
 
-    # 2. Iteração e Processamento Incremental
     for item in all_files_in_folder:
         file_id = item.get('id')
         file_name = item.get('name', 'NomeDesconhecido')
         mime_type = item.get('mimeType')
         capabilities = item.get('capabilities', {})
         can_download = capabilities.get('canDownload', False)
-        item_path_log = os.path.join(folder_path_log, file_name) # Para logs
+        item_path_log = os.path.join(folder_path_log, file_name)
 
-        # --- Lógica de Verificação de Arquivo Processado --- START ---
         if supabase_client:
             try:
-                # Adicionar retry aqui também
                 @default_retry
                 def check_processed(cli, f_id):
                     return cli.table('processed_files')\
                               .select('file_id', count='exact')\
                               .eq('file_id', f_id)\
                               .execute()
-
                 supabase_response = check_processed(supabase_client, file_id)
-
                 if supabase_response.count > 0:
                     logger.info(f"  -> Arquivo '{item_path_log}' (ID: {file_id}) já existe em 'processed_files'. Pulando.")
-                    continue # Pula para o próximo item
+                    continue
                 else:
                     logger.debug(f"  [Check Supabase] Arquivo '{item_path_log}' (ID: {file_id}) não encontrado em 'processed_files'. Prosseguindo.")
             except PostgrestAPIError as api_error:
-                # Logar erro mas continuar, assumindo que o arquivo não foi processado
                 logger.error(f"  [Check Supabase] Erro API ao verificar {item_path_log} (ID: {file_id}): {api_error.message}. Assumindo não processado.", exc_info=True)
             except Exception as check_err:
-                # Logar erro mas continuar
-                 logger.error(f"  [Check Supabase] Erro inesperado ao verificar {item_path_log} (ID: {file_id}): {check_err}. Assumindo não processado.", exc_info=True)
+                logger.error(f"  [Check Supabase] Erro inesperado ao verificar {item_path_log} (ID: {file_id}): {check_err}. Assumindo não processado.", exc_info=True)
         else:
-             logger.debug("  Supabase client não disponível, pulando verificação de arquivos processados.")
-        # --- Lógica de Verificação de Arquivo Processado --- END ---
+            logger.debug("  Supabase client não disponível, pulando verificação de arquivos processados.")
 
-        # --- Lógica de Filtragem --- START ---
         file_ext = os.path.splitext(file_name)[1].lower()
         is_hidden = file_name.startswith('.')
         normalized_file_name = file_name.lower()
-
         if normalized_file_name in IGNORED_FILENAMES or \
            file_ext in IGNORED_EXTENSIONS or \
            is_hidden:
@@ -632,183 +603,135 @@ def ingest_gdrive_folder(
                       f"Ext: {file_ext in IGNORED_EXTENSIONS}, "
                       f"Oculto: {is_hidden})")
             logger.info(f"  -> Ignorando arquivo irrelevante/config: {item_path_log} {reason}")
-            continue # Pula para o próximo item
-        # --- Lógica de Filtragem --- END ---
-
-        # Identificar tipo e processar
-        item_type = None
-        text_content = None
-        file_data_for_chunking = None # Dados a serem usados para chunk/save
-
-        if mime_type == 'application/vnd.google-apps.folder':
-            # --- Processar Subpasta (Recursão) ---
-            logger.info(f"  Identificada SUBPASTA: {file_name}. Iniciando ingestão recursiva...")
-            if not dry_run:
-                # Passar o caminho atual para a chamada recursiva
-                subfolder_success = ingest_gdrive_folder(service, file_name, file_id, dry_run, access_level, folder_path_log)
-                if not subfolder_success:
-                    overall_success = False # Propagar falha de subpasta
             continue
 
+        text_content = None
+        file_data_for_chunking = None
+
+        if mime_type == 'application/vnd.google-apps.folder':
+            logger.info(f"  Identificada SUBPASTA: {file_name}. Iniciando ingestão recursiva...")
+            if not dry_run:
+                subfolder_success = ingest_gdrive_folder(service, file_name, file_id, dry_run, access_level, folder_path_log)
+                if not subfolder_success:
+                    overall_success = False
+            continue
         elif mime_type in DOCUMENT_MIME_TYPES:
-            # --- Processar Documento ---
             logger.info(f"  Identificado DOCUMENTO: {item_path_log} (ID: {file_id}, Tipo: {mime_type})")
             if not can_download and mime_type != 'application/vnd.google-apps.document':
                  logger.warning(f"   -> Sem permissão para baixar o documento {item_path_log}. Pulando.")
                  continue
-
-            if dry_run: continue # Pular download/processamento em dry-run
-
+            if dry_run: continue
             file_content_bytes = None
             try:
                 if mime_type == 'application/vnd.google-apps.document':
                     file_content_bytes = export_and_download_gdoc(service, file_id, GDRIVE_EXPORT_MIME)
-                    # Usar DOCX como mime_type para extração, já que foi exportado
                     extraction_mime_type = GDRIVE_EXPORT_MIME
                 else:
                     file_content_bytes = download_file(service, file_id)
                     extraction_mime_type = mime_type
-
                 if file_content_bytes:
                     text_content = extract_text_from_file(extraction_mime_type, file_content_bytes, file_name)
                     if text_content:
                         logger.info(f"   -> Texto extraído com sucesso de {item_path_log}.")
-                        file_data_for_chunking = { # Preparar dados para chunk/save
-                            "content": text_content,
-                            "metadata": create_metadata(item)
-                        }
+                        file_data_for_chunking = {"content": text_content, "metadata": create_metadata(item)}
                     else:
                         logger.warning(f"   -> Falha ao extrair texto de {item_path_log}.")
-                        continue # Pular para o próximo item se não extrair texto
+                        continue
                 else:
                     logger.warning(f"   -> Falha ao baixar/exportar {item_path_log}.")
-                    continue # Pular para o próximo item se falhar download
+                    continue
             except Exception as doc_proc_err:
-                 logger.error(f"   -> Erro inesperado ao processar documento {item_path_log}: {doc_proc_err}", exc_info=True)
-                 overall_success = False # Marcar falha, mas não pular para próximo item (pode ser intermitente)
-
+                logger.error(f"   -> Erro inesperado ao processar documento {item_path_log}: {doc_proc_err}", exc_info=True)
+                overall_success = False
         elif mime_type in VIDEO_MIME_TYPES:
-            # --- Processar Vídeo ---
             file_size_mb = int(item.get('size', 0)) / (1024 * 1024)
             logger.info(f"  Identificado VÍDEO: {item_path_log} (ID: {file_id}, Tipo: {mime_type}, Tamanho: {file_size_mb:.2f} MB)")
             if not can_download:
                  logger.warning(f"   -> Sem permissão para baixar o vídeo {item_path_log}. Pulando.")
                  continue
-
-            if dry_run: continue # Pular download/processamento em dry-run
-
+            if dry_run: continue
             downloaded_video_path = None
             try:
-                # --- Download do vídeo ---
                 logger.debug(f"   -> Baixando arquivo de vídeo (ID: {file_id})...")
                 file_content_bytes = download_file(service, file_id)
                 if file_content_bytes:
-                    # Salvar vídeo temporariamente (agora usa tempfile.NamedTemporaryFile sem dir explícito)
                     temp_video_suffix = os.path.splitext(file_name)[1] or '.mp4'
                     with tempfile.NamedTemporaryFile(delete=False, suffix=temp_video_suffix) as temp_video_file:
                          temp_video_file.write(file_content_bytes)
                          downloaded_video_path = temp_video_file.name
                     logger.info(f"   -> Vídeo {file_name} baixado para {downloaded_video_path}")
-
-                    # --- Transcrição ---
                     logger.info(f"   -> Iniciando transcrição para {downloaded_video_path}...")
                     from ingestion.video_transcription import process_video
                     transcription_result = process_video(downloaded_video_path)
-
                     if transcription_result and transcription_result.get("text"):
                         logger.info(f"   -> Transcrição concluída para {file_name}.")
-                        file_data_for_chunking = {
-                            "content": transcription_result.get("text"),
-                            "metadata": create_metadata(item)
-                        }
+                        file_data_for_chunking = {"content": transcription_result.get("text"), "metadata": create_metadata(item)}
                     else:
                          logger.warning(f"   -> Falha ou transcrição vazia para {file_name}.")
-                         overall_success = False # Marcar falha
+                         overall_success = False
                 else:
                     logger.warning(f"   -> Falha ao baixar vídeo {item_path_log}.")
-                    overall_success = False # Marcar falha
-
+                    overall_success = False
             except Exception as video_proc_err:
                  logger.error(f"   -> Erro inesperado ao processar vídeo {item_path_log}: {video_proc_err}", exc_info=True)
-                 overall_success = False # Marcar falha
+                 overall_success = False
             finally:
-                 # Limpar vídeo baixado (inalterado)
                  if downloaded_video_path and os.path.exists(downloaded_video_path):
                       try:
                           os.remove(downloaded_video_path)
                           logger.debug(f"   -> Arquivo de vídeo temporário removido: {downloaded_video_path}")
                       except OSError as e:
                           logger.error(f"   -> Erro ao remover arquivo de vídeo temporário {downloaded_video_path}: {e}")
-
         elif is_supported_image(item):
-            # --- Processar Imagem (se habilitado futuramente) ---
             logger.info(f"  Identificada IMAGEM SUPORTADA: {item_path_log} (Pulando por enquanto)")
-            # file_data = process_image(service, item, temp_dir_path) # Chamar process_image
-            # if file_data:
-            #     file_data_for_chunking = file_data # Preparar para chunk/save se OCR retornar texto
-            continue # Pular processamento de imagem por agora
+            continue
         else:
             logger.info(f"  -> Ignorando tipo de arquivo não suportado/config: {item_path_log} (Tipo: {mime_type})")
-            continue # Pula para o próximo item
+            continue
 
-        # --- Processamento Incremental: Chunk e Save ---
         if file_data_for_chunking and supabase_client:
             content_to_chunk = file_data_for_chunking.get("content")
             metadata_for_chunks = file_data_for_chunking.get("metadata", {})
-            source_name_log = metadata_for_chunks.get("source_name", file_id) # Usar nome ou ID para log
-
+            source_name_log = metadata_for_chunks.get("source_name", file_id)
             if content_to_chunk:
                 logger.info(f"  Iniciando chunking para {source_name_log}...")
-                chunks = split_content_into_chunks(content_to_chunk, metadata_for_chunks)
-
+                chunks = split_content_into_chunks(
+                    content_to_chunk,
+                    metadata_for_chunks,
+                    max_chunk_tokens=2048,
+                    min_chunk_chars=300,
+                    model_name=os.getenv("OPENAI_MODEL", "gpt-4o")
+                )
                 if chunks:
                     logger.info(f"  Iniciando salvamento de {len(chunks)} chunks para {source_name_log} no Supabase...")
                     save_success = _insert_initial_chunks_supabase(supabase_client, chunks, source_name_log)
-
                     if save_success:
-                         logger.info(f"  Chunks para {source_name_log} salvos com sucesso. Marcando como processado.")
-                         # --- Marcar como Processado ---
-                         try:
-                             # Adicionar retry
-                             @default_retry
-                             def mark_processed(cli, f_id):
-                                 return cli.table('processed_files').insert({"file_id": f_id}).execute()
-
-                             mark_response = mark_processed(supabase_client, file_id)
-                             # Verificar resposta - pode variar, mas ausência de erro é bom sinal
-                             if hasattr(mark_response, 'error') and mark_response.error:
+                        logger.info(f"  Chunks para {source_name_log} salvos com sucesso. Marcando como processado.")
+                        try:
+                            @default_retry
+                            def mark_processed(cli, f_id):
+                                return cli.table('processed_files').insert({"file_id": f_id}).execute()
+                            mark_response = mark_processed(supabase_client, file_id)
+                            if hasattr(mark_response, 'error') and mark_response.error:
                                 logger.error(f"  -> Falha ao marcar {source_name_log} como processado (Erro API Supabase): {mark_response.error}")
-                                overall_success = False # Marcar falhou
-                             else:
+                                overall_success = False
+                            else:
                                 logger.info(f"  -> Arquivo {source_name_log} (ID: {file_id}) marcado como processado.")
-
-                         except Exception as mark_err:
-                             logger.error(f"  -> Erro inesperado ao marcar {source_name_log} como processado: {mark_err}", exc_info=True)
-                             overall_success = False # Marcar falhou
+                        except Exception as mark_err:
+                            logger.error(f"  -> Erro inesperado ao marcar {source_name_log} como processado: {mark_err}", exc_info=True)
+                            overall_success = False
                     else:
-                         logger.error(f"  Falha ao salvar chunks para {source_name_log}. Arquivo NÃO será marcado como processado.")
-                         overall_success = False # Salvar chunks falhou
+                        logger.error(f"  Falha ao salvar chunks para {source_name_log}. Arquivo NÃO será marcado como processado.")
+                        overall_success = False
                 else:
                     logger.warning(f"  Nenhum chunk gerado para {source_name_log} (conteúdo pode ser vazio ou erro no chunking).")
-                    # Considerar se isso deve marcar como falha ou apenas pular
-                    # overall_success = False
             else:
                 logger.warning(f"  Conteúdo vazio encontrado para {source_name_log} antes do chunking.")
-                # Considerar se isso deve marcar como falha
-                # overall_success = False
         elif not supabase_client:
             logger.warning("  Supabase client não configurado. Pulando salvamento de chunks e marcação de processado.")
-            overall_success = False # Considerar falha se Supabase é essencial
-        # --- Fim Processamento Incremental ---
-
+            overall_success = False
     logger.info(f"Ingestão da pasta {folder_path_log} concluída.")
     return overall_success
-
-# Adicionar função auxiliar _mark_file_processed_supabase (copiada/adaptada) se não existir
-# @default_retry
-# def _mark_file_processed_supabase(supabase_cli: Client, file_id: str, source_name: str):
-#    # ... (lógica de inserção em processed_files) ...
-#    # Esta lógica foi integrada diretamente acima para clareza
 
 def create_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
     """Cria um dicionário de metadados padronizado a partir do item do GDrive."""
@@ -816,24 +739,18 @@ def create_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
         "source_name": item.get("name"),
         "gdrive_id": item.get("id"),
         "mime_type": item.get("mimeType"),
-        "gdrive_parent_id": item.get("parents", [None])[0], # Pega o primeiro pai
+        "gdrive_parent_id": item.get("parents", [None])[0],
         "created_time": item.get("createdTime"),
         "modified_time": item.get("modifiedTime"),
         "size_bytes": item.get("size"),
-        "gdrive_webview_link": item.get("webViewLink"), # Adicionado link web
-        "origin": "gdrive" # Indica a origem
-        # Adicionar outros metadados relevantes aqui
+        "gdrive_webview_link": item.get("webViewLink"),
+        "origin": "gdrive"
     }
-
-
-# ... (função ingest_all_gdrive_content e main existentes, podem precisar de ajustes menores
-#      para não esperar mais a lista de resultados de ingest_gdrive_folder) ...
 
 def ingest_all_gdrive_content(dry_run=False):
     """
     Função principal para ingerir conteúdo de todas as pastas raiz configuradas.
     """
-    # DEBUG: Logar o dicionário os.environ completo antes de acessar a variável
     try:
         env_vars_json = json.dumps(dict(os.environ), indent=2, sort_keys=True)
         logger.debug(f"[DEBUG env vars] Conteúdo de os.environ antes de get('GDRIVE_ROOT_FOLDER_IDS'):\n{env_vars_json}")
@@ -843,61 +760,38 @@ def ingest_all_gdrive_content(dry_run=False):
     root_folder_ids_str = os.environ.get('GDRIVE_ROOT_FOLDER_IDS')
     if not root_folder_ids_str:
         logger.critical("Variável de ambiente GDRIVE_ROOT_FOLDER_IDS não definida.")
-        return None # Retorna None se não estiver definida
+        return None
 
     root_folder_ids = [folder_id.strip() for folder_id in root_folder_ids_str.split(',') if folder_id.strip()]
     logger.info(f"Pastas raiz a serem processadas: {root_folder_ids}")
 
-    all_ingested_items = []
-    temp_dir_path = None # Inicializar como None fora do loop
-
-    # <<< INICIALIZAR O SERVICE AQUI >>>
     service = authenticate_gdrive()
     if not service:
         logger.critical("Falha ao autenticar na API do Google Drive. Abortando ingestão.")
-        return None # Retornar None se a autenticação falhar
+        return None
 
     for folder_id in root_folder_ids:
         try:
-            # Obter nome da pasta raiz para logs
             folder_metadata = service.files().get(fileId=folder_id, fields='id, name, capabilities').execute()
             folder_name = folder_metadata.get('name', folder_id)
             logger.info(f"Iniciando processamento da pasta raiz: '{folder_name}' (ID: {folder_id})")
 
-            # Iniciar ingestão recursiva (passando o service)
-            # A função ingest_gdrive_folder agora gerencia seu próprio diretório temp
             ingest_successful = ingest_gdrive_folder(
-                service=service, # Passar o service autenticado
+                service=service,
                 folder_name=folder_name,
                 folder_id=folder_id,
                 dry_run=dry_run,
-                access_level=None # Determinar acesso se necessário
+                access_level=None
             )
-            # A função ingest_gdrive_folder agora retorna bool
             if not ingest_successful:
-                 logger.warning(f"Houve falhas ao processar/salvar itens na pasta '{folder_name}' (ID: {folder_id}). Verifique logs anteriores.")
-            # A lógica de agregação foi movida para dentro de ingest_gdrive_folder
-            # if ingested_for_folder:
-            #     all_ingested_items.extend(ingested_for_folder)
-
+                logger.warning(f"Houve falhas ao processar/salvar itens na pasta '{folder_name}' (ID: {folder_id}). Verifique logs anteriores.")
         except HttpError as error:
             logger.error(f"Erro HTTP ao processar pasta raiz {folder_id}: {error}", exc_info=True)
         except Exception as e:
             logger.error(f"Erro inesperado ao processar pasta raiz {folder_id}: {e}", exc_info=True)
-        # finally: # <-- Bloco finally removido daqui, limpeza é feita dentro de ingest_gdrive_folder
-        #     if temp_dir_path and os.path.exists(temp_dir_path):
-        #         try:
-        #             shutil.rmtree(temp_dir_path)
-        #             logger.info(f"Diretório temporário {temp_dir_path} removido.")
-        #         except Exception as e_clean:
-        #             logger.error(f"Erro ao remover diretório temporário {temp_dir_path}: {e_clean}", exc_info=True)
-        #     temp_dir_path = None # Resetar para a próxima pasta
 
-    # Retornar None por enquanto, pois run_pipeline não espera mais os dados diretamente
-    # A lógica de processamento pega os dados do Supabase agora.
-    # No futuro, pode retornar um status ou resumo.
     logger.info("Processamento de todas as pastas raiz concluído.")
-    return None # Mudar se necessário
+    return None
 
 
 def main():

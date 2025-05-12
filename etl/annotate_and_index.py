@@ -34,6 +34,9 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import tempfile
+import json
+import traceback
 
 import tiktoken
 from dotenv import load_dotenv
@@ -184,52 +187,57 @@ def _update_chunk_status_supabase(doc_id: str, update: Dict[str, Any]):
 @tenacity_retry()
 def _run_annotation(annotator: AnnotatorAgent, chunk: Dict[str, Any]) -> Optional[ChunkOut]:
     logger.debug(f"Executando anotação para o chunk {chunk.get('document_id', 'ID Desconhecido')}")
-    
-    # Sanitizar metadados para evitar erros com tipos não-hashable
     if 'metadata' in chunk and chunk['metadata']:
         chunk['metadata'] = _sanitize_metadata(chunk['metadata'])
-        
     try:
-        # === REMOVER LOG TYPE CHECK ===
-        # logger.info(f"VERIFICANDO TIPO DE 'chunk' ANTES DE annotator.run: {type(chunk).__name__}")
-        # if not isinstance(chunk, dict):
-        #      logger.error(f"ERRO CRÍTICO: 'chunk' NÃO é um dicionário antes de chamar annotator.run! Valor: {chunk}")
-        #      raise TypeError(f"'chunk' should be a dict, but got {type(chunk).__name__}")
-        # === END REMOVE LOG TYPE CHECK ===
-        
         result = annotator.run(chunk)
         logger.debug(f"Resultado da anotação para {chunk.get('document_id', 'ID Desconhecido')}: Keep={result.keep if result else None}")
         return result
     except Exception as e:
-        logger.error(f"Erro durante _run_annotation para {chunk.get('document_id', 'ID Desconhecido')}: {e}", exc_info=True)
-        raise # Re-lançar para retentativa
+        logger.error(f"Erro durante _run_annotation para {chunk.get('document_id', 'ID Desconhecido')}: {e}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
+        raise
 
 @tenacity_retry()
 def _upload_chunk_r2r(chunk: Dict[str, Any]):
     doc_id = chunk["document_id"]
-    logger.debug(f"Preparando para fazer upload do chunk {doc_id} para R2R.")
+    logger.info(f"[UPLOAD] Iniciando upload do chunk/documento {doc_id} para SciPhi/R2R...")
     if not r2r_client:
         logger.warning("R2R client não está disponível. Pulando upload.")
-        return # Retorna sem fazer nada se o R2R não estiver configurado
-
+        return
     try:
-        # Sanitiza os metadados ANTES de usá-los
-        meta = _sanitize_metadata(chunk.get("metadata", {})) # Usar .get com default {}
-        meta["document_id"] = doc_id # Garante que o document_id correto está nos metadados
-        meta.setdefault("source", chunk.get("metadata", {}).get("source_name", "unknown")) # Pega source_name se existir
-
-        logger.debug(f"Enviando chunk {doc_id} para R2R com metadados: {meta}")
-        r2r_client.upload_and_process_file(
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp_file:
+            json.dump(chunk, tmp_file, ensure_ascii=False)
+            tmp_file_path = tmp_file.name
+        meta = _sanitize_metadata(chunk.get("metadata", {}))
+        meta["document_id"] = doc_id
+        meta.setdefault("source", chunk.get("metadata", {}).get("source_name", "unknown"))
+        response = r2r_client.upload_file(
+            file_path=tmp_file_path,
             document_id=doc_id,
-            blob=chunk["content"].encode('utf-8'), # Especificar encoding
-            metadata=meta,
-            settings={},
+            metadata=meta
         )
-        logger.info(f"Upload do chunk {doc_id} para R2R bem-sucedido.")
+        logger.info(f"[UPLOAD] Upload concluído para {doc_id}. Resposta: {getattr(response, 'text', str(response))}")
+        return response
     except Exception as e:
-        logger.error(f"Erro durante _upload_chunk_r2r para {doc_id}: {e}", exc_info=True)
-        raise # Re-lançar para retentativa
+        logger.error(f"[UPLOAD] Erro ao enviar {doc_id} para SciPhi/R2R: {e}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
+        return None
 
+def ensure_chunk_exists(chunk):
+    """
+    Garante que o chunk/documento existe na tabela 'documents'.
+    Se não existir, faz insert.
+    """
+    doc_id = chunk.get("document_id")
+    # Busca por document_id
+    resp = supabase.table("documents").select("document_id").eq("document_id", doc_id).limit(1).execute()
+    if not resp.data:
+        # Não existe, faz insert
+        logger.info(f"[INSERT] Criando novo chunk/documento no Supabase: {doc_id}")
+        # Remove campos não persistíveis se necessário
+        insert_chunk = {k: v for k, v in chunk.items() if k != "chunk_index"} # chunk_index só em metadata
+        supabase.table("documents").insert(insert_chunk).execute()
+    else:
+        logger.debug(f"[EXISTE] Chunk/documento já existe no Supabase: {doc_id}")
 
 # ---------------------------------------------------------------------------
 # Processa um único chunk
@@ -243,24 +251,24 @@ def process_single_chunk(
 ):
     """
     Processa um único chunk: anota (opcional) e indexa (opcional).
-    
+    Garante que o chunk exista na tabela antes de updates.
+
     Args:
         chunk: Dicionário com os dados do chunk a ser processado
         annotator: Instância do AnnotatorAgent ou None
         skip_annotation: Flag para pular etapa de anotação
         skip_indexing: Flag para pular etapa de indexação
     """
+    # --- Garantia sênior: chunk/documento sempre existe ---
+    ensure_chunk_exists(chunk)
     doc_id = chunk.get("document_id", f"id_ausente_{uuid.uuid4()}") # Usar get com fallback
     logger.info(f"Iniciando processamento do chunk: {doc_id}")
-
     current_annotation_status = chunk.get("annotation_status")
     current_indexing_status = chunk.get("indexing_status")
     keep_chunk = chunk.get("keep") # Pode ser None, True ou False
-
     # ---------------- Anotação (Com updates reativados e try/except corrigido) ----------------
     if not skip_annotation and current_annotation_status in {None, "pending", "error"}:
         logger.debug(f"Chunk {doc_id}: Tentando anotação (Status atual: {current_annotation_status}).")
-        
         if not annotator:
             logger.warning(f"Chunk {doc_id}: Annotator ausente – pulando anotação.")
             update = {"annotation_status": "skipped", "annotated_at": datetime.now(timezone.utc).isoformat()}
@@ -272,9 +280,7 @@ def process_single_chunk(
                 if not isinstance(chunk, dict):
                     logger.error(f"ERRO CRÍTICO: 'chunk' NÃO é um dicionário antes de chamar annotator.run! Valor: {chunk}")
                     raise TypeError(f"'chunk' should be a dict, but got {type(chunk).__name__}")
-                
                 result = _run_annotation(annotator, chunk)
-                
                 if result:
                     logger.info(f"Chunk {doc_id}: Anotação bem-sucedida. Keep={result.keep}, Tags={result.tags}")
                     update = {
@@ -292,20 +298,16 @@ def process_single_chunk(
                     _update_chunk_status_supabase(doc_id, update)
                     keep_chunk = False
                     current_annotation_status = "error"
-            
             except Exception as exc:
-                logger.exception(f"Chunk {doc_id}: Erro FINAL durante anotação: {exc}")
+                logger.error(f"Chunk {doc_id}: Erro FINAL durante anotação: {exc}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
                 update = {"annotation_status": "error", "annotated_at": datetime.now(timezone.utc).isoformat(), "keep": False}
                 _update_chunk_status_supabase(doc_id, update)
                 keep_chunk = False
                 current_annotation_status = "error"
-    
     elif skip_annotation:
         logger.debug(f"Chunk {doc_id}: Anotação pulada por flag.")
-    
     else:
         logger.debug(f"Chunk {doc_id}: Anotação não necessária (Status: {current_annotation_status}).")
-
     # ---------------- Indexação (Com updates reativados) ----------------
     if (
         not skip_indexing
@@ -314,10 +316,7 @@ def process_single_chunk(
     ):
         logger.debug(f"Chunk {doc_id}: Tentando indexação (Keep={keep_chunk}, Status atual: {current_indexing_status}).")
         try:
-            # === REMOVER COMENTÁRIO PARA REATIVAR R2R ===
-            _upload_chunk_r2r(chunk) # Já tem retentativa e checagem de r2r_client
-            # logger.warning(f"Chunk {doc_id}: Upload R2R comentado para teste.") # Remover Log temporário
-            # === FIM DO REMOVER COMENTÁRIO ===
+            _upload_chunk_r2r(chunk)
             logger.info(f"Chunk {doc_id}: Indexação bem-sucedida.")
             update = {
                 "indexing_status": "done",
@@ -325,10 +324,8 @@ def process_single_chunk(
             }
             _update_chunk_status_supabase(doc_id, update)
             current_indexing_status = "done"
-        
-        # Capturar erros na execução da indexação
         except Exception as exc:
-            logger.exception(f"Chunk {doc_id}: Erro FINAL durante indexação: {exc}")
+            logger.error(f"Chunk {doc_id}: Erro FINAL durante indexação: {exc}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
             update = {"indexing_status": "error", "indexed_at": datetime.now(timezone.utc).isoformat()}
             _update_chunk_status_supabase(doc_id, update)
             current_indexing_status = "error"
@@ -408,7 +405,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
 
     if not chunks:
         logger.info("Nenhum chunk encontrado para processamento.")
-        return
+            return
 
     logger.info(f"Processando {len(chunks)} chunks encontrados...")
     processed_count = 0
@@ -425,7 +422,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
                 future.result()  # Pega o resultado (ou re-lança exceção se houve)
                 processed_count += 1
                 logger.debug(f"Chunk {doc_id} processado com sucesso pelo worker.")
-            except Exception as exc:
+                except Exception as exc:
                 logger.error(f"Erro no worker ao processar chunk {doc_id}: {exc}", exc_info=True)
                 failed_chunks.append(doc_id)
 
@@ -452,14 +449,14 @@ def main():
     args = parser.parse_args()
 
     logger.info("Executando ETL com argumentos: %s", args)
-    run_pipeline(
+        run_pipeline(
         batch_size=args.batch_size,
         max_workers=args.max_workers,
-        skip_annotation=args.skip_annotation,
-        skip_indexing=args.skip_indexing,
+            skip_annotation=args.skip_annotation,
+            skip_indexing=args.skip_indexing,
     )
     logger.info("Execução do script finalizada.")
 
 
 if __name__ == "__main__":
-    main()
+    main() 
