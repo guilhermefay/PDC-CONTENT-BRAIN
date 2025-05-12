@@ -8,9 +8,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia os diretórios necessários para a API
-COPY api ./api
+# Copia os arquivos da API
+COPY rag_api.py .
 COPY infra ./infra
+COPY __init__.py .
 
 # Comando para iniciar o servidor Gunicorn com Uvicorn workers
-CMD ["gunicorn", "api.rag_api:app", "--workers", "4", "--bind", "0.0.0.0:7860", "--worker-class", "uvicorn.workers.UvicornWorker"] 
+CMD ["gunicorn", "rag_api:app", "--workers", "4", "--bind", "0.0.0.0:7860", "--worker-class", "uvicorn.workers.UvicornWorker"] 
