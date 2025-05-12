@@ -19,6 +19,9 @@ COPY ../ingestion /app/ingestion
 COPY ./etl /app/etl
 COPY ../infra /app/infra
 
+# Comando temporário para debug: listar o conteúdo de /app
+RUN ls -la /app
+
 # Definir o comando para iniciar a aplicação do worker.
 # O WORKDIR /app garante que ingestion.gdrive_ingest seja importável.
 CMD ["python", "-m", "ingestion.gdrive_ingest"] 
