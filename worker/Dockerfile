@@ -1,8 +1,14 @@
 # Use a imagem oficial do Python como base
 FROM python:3.11-slim
 
+# Comando temporário para debug: listar o conteúdo da raiz do contexto de build
+RUN ls -la /
+
 # Definir o diretório de trabalho dentro do contêiner
 WORKDIR /app
+
+# Comando temporário para debug: listar o conteúdo do diretório de trabalho /app
+RUN ls -la /app
 
 # Copiar os arquivos de dependência
 # Usando api/requirements.txt por enquanto, pois um requirements dedicado para o worker não foi encontrado.
