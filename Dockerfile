@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Copiar o restante do código fonte da API R2R.
 # O caminho de origem também é relativo à raiz do contexto de build.
-COPY ./R2R/py /app/R2R/py
+COPY ./R2R/py/. /app/R2R/py/
 
 # Expor a porta que a aplicação R2R usa.
 EXPOSE 8000
