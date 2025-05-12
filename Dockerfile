@@ -24,4 +24,4 @@ EXPOSE 8000
 
 # Definir o comando para iniciar a aplicação R2R.
 # Usamos gunicorn para servir a aplicação FastAPI, o --chdir agora aponta para o novo diretório dentro do contêiner
-CMD ["gunicorn", "main:app", "--workers", "1", "--timeout", "120", "--bind", "0.0.0.0:8000", "--chdir", "/app/api"] 
+CMD ["gunicorn", "rag_api:app", "--workers", "1", "--timeout", "120", "--bind", "0.0.0.0:8000", "--chdir", "/app/api"] 
