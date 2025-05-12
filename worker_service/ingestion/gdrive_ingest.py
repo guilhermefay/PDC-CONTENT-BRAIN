@@ -20,7 +20,7 @@ import logging
 import tiktoken
 import uuid
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -164,98 +164,100 @@ default_retry = retry(
 
 # --- NOVA FUNÇÃO: Verificar se pasta já foi processada ---
 @default_retry
-def check_folder_processed(supabase_cli: Client, folder_id: str) -> bool:
+def check_folder_processed(supabase_cli: Client, folder_id: str) -> Optional[datetime]:
     """
-    Verifica no Supabase se uma pasta já foi completamente processada.
-    Tenta verificar na tabela 'processed_folders' se existe um registro para este folder_id.
+    Verifica no Supabase se uma pasta já foi completamente processada e retorna o timestamp.
+    Chama a função RPC 'check_processed_folder' no Supabase.
+    Retorna o datetime do último processamento ou None.
     """
     if not supabase_cli:
         logger.warning("Cliente Supabase não disponível para verificar pasta processada.")
-        return False
+        return None
     
     try:
-        response = supabase_cli.table('processed_folders')\
-                          .select('folder_id', count='exact')\
-                          .eq('folder_id', folder_id)\
-                          .execute()
+        # Chama a função RPC no Supabase
+        # A RPC deve retornar um único valor de timestamp ou NULL
+        response = supabase_cli.rpc('check_processed_folder', {'folder_id_param': folder_id}).execute()
         
-        is_processed = response.count > 0
-        if is_processed:
-            logger.info(f"Pasta {folder_id} encontrada como completamente processada. Pulando verificação de arquivos.")
-        return is_processed
+        # A resposta da RPC para uma função que retorna um único valor escalar
+        # geralmente tem os dados diretamente no atributo 'data'.
+        if response.data:
+            # Tentar converter a string de timestamp para datetime
+            try:
+                timestamp_str = response.data
+                # Ajustar para o formato de timestamp que o Supabase retorna (pode incluir 'Z' ou offset)
+                # Exemplo: '2023-10-27T10:30:00+00:00' ou '2023-10-27T10:30:00Z'
+                if isinstance(timestamp_str, str):
+                    dt_object = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    logger.info(f"Pasta {folder_id} encontrada no cache. Último processamento: {dt_object.isoformat()}")
+                    return dt_object
+                else: # Se já for um objeto datetime (menos provável via RPC básica)
+                    logger.info(f"Pasta {folder_id} encontrada no cache. Último processamento (objeto dt): {timestamp_str.isoformat()}")
+                    return timestamp_str
+            except ValueError as ve:
+                logger.error(f"Erro ao converter timestamp '{response.data}' para datetime para pasta {folder_id}: {ve}")
+                return None # Indica que houve um problema com o formato do timestamp
+        else:
+            # logger.info(f"Pasta {folder_id} não encontrada no cache de pastas processadas ou RPC retornou NULL.")
+            return None # Pasta não encontrada ou RPC retornou NULL
+            
     except PostgrestAPIError as api_error:
-        # Se a tabela não existir, ela precisa ser criada
-        if "relation \"processed_folders\" does not exist" in str(api_error):
-            logger.warning("Tabela 'processed_folders' não existe. Será criada no próximo ciclo após processamento completo de uma pasta.")
-            return False
-        logger.error(f"Erro API ao verificar pasta processada {folder_id}: {api_error.message}", exc_info=True)
-        return False
+        # Se a tabela ou função não existir, tratar como "não processada"
+        if (
+            ("relation \"processed_folders\" does not exist" in str(api_error.message).lower()) or
+            ("function public.check_processed_folder" in str(api_error.message).lower() and "does not exist" in str(api_error.message).lower())
+        ):
+            logger.warning(f"Tabela 'processed_folders' ou função RPC 'check_processed_folder' não existe. Assumindo que a pasta {folder_id} não foi processada.")
+            return None # Trata como não processada para permitir a criação e processamento inicial
+        logger.error(f"Erro API Supabase ao chamar RPC check_processed_folder para {folder_id}: {api_error.message}", exc_info=True)
+        return None # Em caso de outros erros de API, assumir que não foi processada para segurança
     except Exception as check_err:
-        logger.error(f"Erro inesperado ao verificar pasta processada {folder_id}: {check_err}", exc_info=True)
-        return False
+        logger.error(f"Erro inesperado ao chamar RPC check_processed_folder para pasta {folder_id}: {check_err}", exc_info=True)
+        return None
 
 # --- NOVA FUNÇÃO: Marcar pasta como processada ---
 @default_retry
-def mark_folder_processed(supabase_cli: Client, folder_id: str, folder_name: str) -> bool:
+def mark_folder_processed(supabase_cli: Client, folder_id: str, folder_name: Optional[str]) -> bool:
     """
-    Marca uma pasta como completamente processada no Supabase.
+    Marca uma pasta como completamente processada no Supabase usando a função RPC.
+    A RPC 'mark_folder_processed' lida com a inserção ou atualização do timestamp.
     """
     if not supabase_cli:
         logger.warning("Cliente Supabase não disponível para marcar pasta como processada.")
         return False
     
     try:
-        # Tentar inserir na tabela 'processed_folders'
-        # Se a tabela não existir, tenta criá-la primeiro
-        try:
-            response = supabase_cli.table('processed_folders').insert({
-                "folder_id": folder_id,
-                "folder_name": folder_name,
-                "processed_at": datetime.now(timezone.utc).isoformat()
-            }).execute()
+        params = {'folder_id_param': folder_id}
+        if folder_name: # Adicionar folder_name_param apenas se fornecido
+            params['folder_name_param'] = folder_name
+        
+        # Chama a função RPC no Supabase
+        # A RPC 'mark_folder_processed' não retorna dados significativos, apenas confirma a execução
+        response = supabase_cli.rpc('mark_folder_processed', params).execute()
+
+        # Verificar se houve algum erro na resposta da RPC (embora rpc().execute() geralmente levante exceção em erro)
+        # Algumas extensões PostgREST podem retornar um status HTTP mesmo em RPCs void.
+        # Para funções VOID, a ausência de erro é sucesso.
+        # response.data será None ou uma lista vazia para RPCs VOID bem-sucedidas.
+        
+        # O cliente python supabase levanta exceção em caso de erro HTTP,
+        # então se chegarmos aqui sem exceção, a chamada RPC foi bem-sucedida.
+        logger.info(f"Pasta {folder_name or 'sem nome'} (ID: {folder_id}) marcada/atualizada como processada via RPC.")
+        return True
             
-            success = not (hasattr(response, 'error') and response.error)
-            if success:
-                logger.info(f"Pasta {folder_name} (ID: {folder_id}) marcada como completamente processada.")
-            else:
-                logger.error(f"Erro ao marcar pasta {folder_name} como processada: {response.error}")
-            return success
-        except PostgrestAPIError as api_error:
-            # Se a tabela não existir, tenta criar
-            if "relation \"processed_folders\" does not exist" in str(api_error):
-                try:
-                    # Criando tabela via SQL
-                    sql_query = """
-                    CREATE TABLE IF NOT EXISTS processed_folders (
-                        id SERIAL PRIMARY KEY,
-                        folder_id TEXT UNIQUE NOT NULL,
-                        folder_name TEXT,
-                        processed_at TIMESTAMPTZ NOT NULL
-                    );
-                    """
-                    # Executar SQL personalizado
-                    supabase_cli.postgrest.schema('public').execute(sql_query)
-                    
-                    # Tentar inserir novamente
-                    response = supabase_cli.table('processed_folders').insert({
-                        "folder_id": folder_id,
-                        "folder_name": folder_name,
-                        "processed_at": datetime.now(timezone.utc).isoformat()
-                    }).execute()
-                    
-                    success = not (hasattr(response, 'error') and response.error)
-                    if success:
-                        logger.info(f"Tabela 'processed_folders' criada e pasta {folder_name} marcada como processada.")
-                    else:
-                        logger.error(f"Erro ao marcar pasta após criar tabela: {response.error}")
-                    return success
-                except Exception as e:
-                    logger.error(f"Erro ao criar tabela 'processed_folders': {e}", exc_info=True)
-                    return False
-            else:
-                raise  # Re-levantar para outro tratamento
-    except Exception as e:
-        logger.error(f"Erro inesperado ao marcar pasta {folder_id} como processada: {e}", exc_info=True)
+    except PostgrestAPIError as api_error:
+        # Se a tabela ou função não existir, logar e retornar falha.
+        # Diferente do check, aqui não tentamos criar, pois a RPC deveria existir.
+        if (
+            ("relation \"processed_folders\" does not exist" in str(api_error.message).lower()) or
+            ("function public.mark_folder_processed" in str(api_error.message).lower() and "does not exist" in str(api_error.message).lower())
+        ):
+            logger.error(f"Tabela 'processed_folders' ou função RPC 'mark_folder_processed' não existe. Não foi possível marcar a pasta {folder_id}.", exc_info=True)
+            return False
+        logger.error(f"Erro API Supabase ao chamar RPC mark_folder_processed para {folder_id}: {api_error.message}", exc_info=True)
+        return False
+    except Exception as mark_err:
+        logger.error(f"Erro inesperado ao chamar RPC mark_folder_processed para pasta {folder_id}: {mark_err}", exc_info=True)
         return False
 
 # --- FUNÇÕES EXISTENTES CONTINUAM ---
@@ -633,233 +635,301 @@ def ingest_gdrive_folder(
     access_level: Optional[str] = None,
     current_path: str = ""
 ) -> bool:
-    # Verificar no cache de memória se a pasta já foi processada nesta execução
-    if folder_id in processed_folders:
-        logger.info(f"Pasta {folder_name} (ID: {folder_id}) já foi processada nesta execução. Pulando.")
-        return True
+    """Ingere recursivamente o conteúdo de uma pasta do Google Drive, usando cache."""
     
-    # Verificar no Supabase se a pasta foi completamente processada em execuções anteriores
-    if supabase_client and check_folder_processed(supabase_client, folder_id):
-        logger.info(f"Pasta {folder_name} (ID: {folder_id}) já foi completamente processada em execução anterior. Pulando.")
-        # Adicionar ao cache em memória também
-        processed_folders.add(folder_id)
-        return True
-        
-    overall_success = True
     folder_path_log = os.path.join(current_path, folder_name)
-    logger.info(f"\nIniciando ingestão da pasta: {folder_path_log} (ID: {folder_id}, Access: {access_level})")
-    page_token = None
-    all_files_in_folder = []
+    logger.info(f"\n[{folder_path_log}] Iniciando ingestão da pasta: ID={folder_id}, Access={access_level}")
 
+    # 1. Verificar Cache de Memória (Sessão Atual)
+    if folder_id in processed_folders:
+        logger.info(f"[{folder_path_log}] Pulando: Já processada nesta sessão (cache memória).")
+        return True
+
+    # 2. Verificar Cache Persistente (Supabase) e obter Timestamp
+    last_processed_at: Optional[datetime] = None
+    if supabase_client:
+        last_processed_at = check_folder_processed(supabase_client, folder_id)
+    else:
+        logger.debug(f"[{folder_path_log}] Cliente Supabase não disponível, cache persistente desabilitado.")
+
+    # 3. Construir a Query da API Google Drive
+    gdrive_query = f"'{folder_id}' in parents and trashed = false"
+    query_description = "Buscando todos os itens"
+
+    if last_processed_at:
+        # MODIFICAÇÃO: Adiciona filtro modifiedTime se a pasta já foi processada
+        timestamp_iso = last_processed_at.isoformat(timespec='milliseconds') + 'Z' 
+        gdrive_query += f" and modifiedTime > '{timestamp_iso}'"
+        query_description = f"Buscando itens modificados desde {timestamp_iso}"
+        logger.info(f"[{folder_path_log}] Pasta encontrada no cache. {query_description}.")
+    else:
+        logger.info(f"[{folder_path_log}] Pasta não encontrada no cache persistente. {query_description}.")
+
+    # 4. Listar Arquivos/Subpastas usando a Query
+    overall_success = True
+    page_token = None
+    all_items_to_process = [] 
+    folder_modified_since_last_check = False # Flag para saber se algo mudou desde a última verificação
+
+    logger.info(f"[{folder_path_log}] Executando query no Google Drive: {gdrive_query}")
     while True:
         try:
             response = service.files().list(
-                q=f"'{folder_id}' in parents and trashed=false",
+                q=gdrive_query,
                 spaces='drive',
                 fields='nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, size, parents, capabilities, webViewLink)',
                 pageToken=page_token
             ).execute()
 
             files_in_current_page = response.get('files', [])
-            logger.info(f"  Encontrados {len(files_in_current_page)} itens nesta página para {folder_path_log}...")
-            all_files_in_folder.extend(files_in_current_page)
-
+            if files_in_current_page:
+                folder_modified_since_last_check = True # Marca que houve atividade
+                logger.info(f"  [{folder_path_log}] Encontrados {len(files_in_current_page)} itens modificados/novos nesta página.")
+                all_items_to_process.extend(files_in_current_page)
+            
             page_token = response.get('nextPageToken', None)
             if page_token is None:
-                logger.debug(f"  Fim da paginação para {folder_path_log}. Total de itens: {len(all_files_in_folder)}")
-                break 
+                logger.debug(f"  [{folder_path_log}] Fim da paginação. Total de itens modificados/novos: {len(all_items_to_process)}")
+                break
         except HttpError as error:
-            logger.error(f"Erro HTTP ao listar arquivos na pasta {folder_id} ({folder_path_log}): {error}")
-            return False
+            logger.error(f"[{folder_path_log}] Erro HTTP ao listar (ID: {folder_id}): {error}")
+            overall_success = False 
+            break 
         except Exception as e:
-            logger.error(f"Erro inesperado ao listar arquivos na pasta {folder_id} ({folder_path_log}): {e}", exc_info=True)
-            return False
-
-    for item in all_files_in_folder:
-        file_id = item.get('id')
-        file_name = item.get('name', 'NomeDesconhecido')
-        mime_type = item.get('mimeType')
-        capabilities = item.get('capabilities', {})
-        can_download = capabilities.get('canDownload', False)
-        item_path_log = os.path.join(folder_path_log, file_name)
-
-        if supabase_client:
-            try:
-                @default_retry
-                def check_processed(cli, f_id):
-                    return cli.table('processed_files')\
-                              .select('file_id', count='exact')\
-                              .eq('file_id', f_id)\
-                              .execute()
-                supabase_response = check_processed(supabase_client, file_id)
-                if supabase_response.count > 0:
-                    logger.info(f"  -> Arquivo '{item_path_log}' (ID: {file_id}) já existe em 'processed_files'. Pulando.")
-                    continue
-                else:
-                    logger.debug(f"  [Check Supabase] Arquivo '{item_path_log}' (ID: {file_id}) não encontrado em 'processed_files'. Prosseguindo.")
-            except PostgrestAPIError as api_error:
-                logger.error(f"  [Check Supabase] Erro API ao verificar {item_path_log} (ID: {file_id}): {api_error.message}. Assumindo não processado.", exc_info=True)
-            except Exception as check_err:
-                logger.error(f"  [Check Supabase] Erro inesperado ao verificar {item_path_log} (ID: {file_id}): {check_err}. Assumindo não processado.", exc_info=True)
-        else:
-            logger.debug("  Supabase client não disponível, pulando verificação de arquivos processados.")
-
-        file_ext = os.path.splitext(file_name)[1].lower()
-        is_hidden = file_name.startswith('.')
-        normalized_file_name = file_name.lower()
-        if normalized_file_name in IGNORED_FILENAMES or \
-           file_ext in IGNORED_EXTENSIONS or \
-           is_hidden:
-            reason = (f"(Nome: {normalized_file_name in IGNORED_FILENAMES}, "
-                      f"Ext: {file_ext in IGNORED_EXTENSIONS}, "
-                      f"Oculto: {is_hidden})")
-            logger.info(f"  -> Ignorando arquivo irrelevante/config: {item_path_log} {reason}")
-            continue
-
-        text_content = None
-        file_data_for_chunking = None
-
-        if mime_type == 'application/vnd.google-apps.folder':
-            logger.info(f"  Identificada SUBPASTA: {file_name}. Iniciando ingestão recursiva...")
-            if not dry_run:
-                subfolder_success = ingest_gdrive_folder(service, file_name, file_id, dry_run, access_level, folder_path_log)
-                if not subfolder_success:
-                    overall_success = False
-            continue
-        elif mime_type in DOCUMENT_MIME_TYPES:
-            logger.info(f"  Identificado DOCUMENTO: {item_path_log} (ID: {file_id}, Tipo: {mime_type})")
-            if not can_download and mime_type != 'application/vnd.google-apps.document':
-                 logger.warning(f"   -> Sem permissão para baixar o documento {item_path_log}. Pulando.")
-                 continue
-            if dry_run: continue
-            file_content_bytes = None
-            try:
-                if mime_type == 'application/vnd.google-apps.document':
-                    file_content_bytes = export_and_download_gdoc(service, file_id, GDRIVE_EXPORT_MIME)
-                    extraction_mime_type = GDRIVE_EXPORT_MIME
-                else:
-                    file_content_bytes = download_file(service, file_id)
-                    extraction_mime_type = mime_type
-                if file_content_bytes:
-                    text_content = extract_text_from_file(extraction_mime_type, file_content_bytes, file_name)
-                    if text_content:
-                        logger.info(f"   -> Texto extraído com sucesso de {item_path_log}.")
-                        file_data_for_chunking = {"content": text_content, "metadata": create_metadata(item)}
-                    else:
-                        logger.warning(f"   -> Falha ao extrair texto de {item_path_log}.")
-                        continue
-                else:
-                    logger.warning(f"   -> Falha ao baixar/exportar {item_path_log}.")
-                    continue
-            except Exception as doc_proc_err:
-                logger.error(f"   -> Erro inesperado ao processar documento {item_path_log}: {doc_proc_err}", exc_info=True)
-                overall_success = False
-        elif mime_type in VIDEO_MIME_TYPES:
-            file_size_mb = int(item.get('size', 0)) / (1024 * 1024)
-            logger.info(f"  Identificado VÍDEO: {item_path_log} (ID: {file_id}, Tipo: {mime_type}, Tamanho: {file_size_mb:.2f} MB)")
-            if not can_download:
-                 logger.warning(f"   -> Sem permissão para baixar o vídeo {item_path_log}. Pulando.")
-                 continue
-            if dry_run: continue
-            downloaded_video_path = None
-            try:
-                logger.debug(f"   -> Baixando arquivo de vídeo (ID: {file_id})...")
-                file_content_bytes = download_file(service, file_id)
-                if file_content_bytes:
-                    temp_video_suffix = os.path.splitext(file_name)[1] or '.mp4'
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=temp_video_suffix) as temp_video_file:
-                         temp_video_file.write(file_content_bytes)
-                         downloaded_video_path = temp_video_file.name
-                    logger.info(f"   -> Vídeo {file_name} baixado para {downloaded_video_path}")
-                    logger.info(f"   -> Iniciando transcrição para {downloaded_video_path}...")
-                    from ingestion.video_transcription import process_video
-                    transcription_result = process_video(downloaded_video_path)
-                    if transcription_result and transcription_result.get("text"):
-                        logger.info(f"   -> Transcrição concluída para {file_name}.")
-                        file_data_for_chunking = {"content": transcription_result.get("text"), "metadata": create_metadata(item)}
-                    else:
-                         logger.warning(f"   -> Falha ou transcrição vazia para {file_name}.")
-                         overall_success = False
-                else:
-                    logger.warning(f"   -> Falha ao baixar vídeo {item_path_log}.")
-                    overall_success = False
-            except Exception as video_proc_err:
-                 logger.error(f"   -> Erro inesperado ao processar vídeo {item_path_log}: {video_proc_err}", exc_info=True)
-                 overall_success = False
-            finally:
-                 if downloaded_video_path and os.path.exists(downloaded_video_path):
-                      try:
-                          os.remove(downloaded_video_path)
-                          logger.debug(f"   -> Arquivo de vídeo temporário removido: {downloaded_video_path}")
-                      except OSError as e:
-                          logger.error(f"   -> Erro ao remover arquivo de vídeo temporário {downloaded_video_path}: {e}")
-        elif is_supported_image(item):
-            logger.info(f"  Identificada IMAGEM SUPORTADA: {item_path_log} (Pulando por enquanto)")
-            continue
-        else:
-            logger.info(f"  -> Ignorando tipo de arquivo não suportado/config: {item_path_log} (Tipo: {mime_type})")
-            continue
-
-        if file_data_for_chunking and supabase_client:
-            content_to_chunk = file_data_for_chunking.get("content")
-            metadata_for_chunks = file_data_for_chunking.get("metadata", {})
-            source_name_log = metadata_for_chunks.get("source_name", file_id)
-            if content_to_chunk:
-                logger.info(f"  Iniciando chunking para {source_name_log}...")
-                chunks = split_content_into_chunks(
-                    content_to_chunk,
-                    metadata_for_chunks,
-                    max_chunk_tokens=2048,
-                    min_chunk_chars=300,
-                    model_name=os.getenv("OPENAI_MODEL", "gpt-4o")
-                )
-                if chunks:
-                    logger.info(f"  Iniciando salvamento de {len(chunks)} chunks para {source_name_log} no Supabase...")
-                    save_success = _insert_initial_chunks_supabase(supabase_client, chunks, source_name_log)
-                    if save_success:
-                        logger.info(f"  Chunks para {source_name_log} salvos com sucesso. Marcando como processado.")
-                        try:
-                            @default_retry
-                            def mark_processed(cli, f_id):
-                                return cli.table('processed_files').insert({"file_id": f_id}).execute()
-                            mark_response = mark_processed(supabase_client, file_id)
-                            if hasattr(mark_response, 'error') and mark_response.error:
-                                logger.error(f"  -> Falha ao marcar {source_name_log} como processado (Erro API Supabase): {mark_response.error}")
-                                overall_success = False
-                            else:
-                                logger.info(f"  -> Arquivo {source_name_log} (ID: {file_id}) marcado como processado.")
-                        except Exception as mark_err:
-                            logger.error(f"  -> Erro inesperado ao marcar {source_name_log} como processado: {mark_err}", exc_info=True)
-                            overall_success = False
-                    else:
-                        logger.error(f"  Falha ao salvar chunks para {source_name_log}. Arquivo NÃO será marcado como processado.")
-                        overall_success = False
-                else:
-                    logger.warning(f"  Nenhum chunk gerado para {source_name_log} (conteúdo pode ser vazio ou erro no chunking).")
-            else:
-                logger.warning(f"  Conteúdo vazio encontrado para {source_name_log} antes do chunking.")
-        elif not supabase_client:
-            logger.warning("  Supabase client não configurado. Pulando salvamento de chunks e marcação de processado.")
+            logger.error(f"[{folder_path_log}] Erro inesperado ao listar (ID: {folder_id}): {e}", exc_info=True)
             overall_success = False
+            break
+            
+    if not overall_success:
+        logger.error(f"[{folder_path_log}] Abortando devido a erro na listagem.")
+        return False
+        
+    # 5. Processar os Itens Encontrados
+    if not all_items_to_process:
+        logger.info(f"[{folder_path_log}] Nenhum item novo ou modificado encontrado.")
+    else:
+        logger.info(f"[{folder_path_log}] Processando {len(all_items_to_process)} itens novos/modificados...")
+        for item in all_items_to_process:
+            file_id = item.get('id')
+            file_name = item.get('name', 'NomeDesconhecido')
+            mime_type = item.get('mimeType')
+            capabilities = item.get('capabilities', {})
+            can_download = capabilities.get('canDownload', False)
+            item_path_log = os.path.join(folder_path_log, file_name)
+            is_folder = mime_type == 'application/vnd.google-apps.folder'
 
-    # Ao final da função, se tudo foi bem-sucedido, marcar pasta como completamente processada
-    if overall_success and not dry_run and supabase_client:
+            if supabase_client:
+                try:
+                    @default_retry
+                    def check_processed_file_db(cli, f_id):
+                        return cli.table('processed_files')\
+                                  .select('file_id', count='exact')\
+                                  .eq('file_id', f_id)\
+                                  .limit(1)\
+                                  .execute()
+                                  
+                    supabase_response = check_processed_file_db(supabase_client, file_id)
+                    if supabase_response.count > 0:
+                        logger.info(f"  -> [Check Arquivo] '{item_path_log}' já em 'processed_files'. Pulando.")
+                        continue 
+                    else:
+                        logger.debug(f"  [Check Arquivo] '{item_path_log}' não em 'processed_files'. Processando.")
+                except PostgrestAPIError as api_error:
+                    logger.error(f"  [Check Arquivo] Erro API Supabase '{item_path_log}': {api_error.message}. Assumindo não processado.", exc_info=False)
+                except Exception as check_err:
+                    logger.error(f"  [Check Arquivo] Erro inesperado '{item_path_log}': {check_err}. Assumindo não processado.", exc_info=False)
+            else:
+                logger.debug(f"  Supabase client não disponível, pulando check de ARQUIVO para {item_path_log}.")
+
+            file_ext = os.path.splitext(file_name)[1].lower()
+            is_hidden = file_name.startswith('.')
+            normalized_file_name = file_name.lower()
+            if normalized_file_name in IGNORED_FILENAMES or \
+               file_ext in IGNORED_EXTENSIONS or \
+               is_hidden:
+                logger.info(f"  -> Ignorando irrelevante/config: {item_path_log}")
+                continue
+
+            text_content = None
+            file_data_for_chunking = None
+
+            if is_folder:
+                logger.info(f"  SUBPASTA MODIFICADA/NOVA: {file_name}. Ingestão recursiva...")
+                if not dry_run:
+                    subfolder_success = ingest_gdrive_folder(service, file_name, file_id, dry_run, access_level, folder_path_log)
+                    if not subfolder_success:
+                        logger.warning(f"  -> Ingestão recursiva de {file_name} com problemas.")
+                continue 
+            elif mime_type in DOCUMENT_MIME_TYPES:
+                logger.info(f"  DOCUMENTO MODIFICADO/NOVO: {item_path_log}")
+                if not can_download and mime_type != 'application/vnd.google-apps.document':
+                     logger.warning(f"   -> Sem permissão download {item_path_log}. Pulando.")
+                     continue
+                if dry_run: continue
+                file_content_bytes = None
+                try:
+                    if mime_type == 'application/vnd.google-apps.document':
+                        file_content_bytes = export_and_download_gdoc(service, file_id, GDRIVE_EXPORT_MIME)
+                        extraction_mime_type = GDRIVE_EXPORT_MIME
+                    else:
+                        file_content_bytes = download_file(service, file_id)
+                        extraction_mime_type = mime_type
+                    if file_content_bytes:
+                        text_content = extract_text_from_file(extraction_mime_type, file_content_bytes, file_name)
+                        if text_content:
+                            logger.info(f"   -> Texto extraído de {item_path_log}.")
+                            file_data_for_chunking = {
+                                "content": text_content, 
+                                "metadata": create_metadata(item, folder_path_log)
+                            }
+                        else:
+                            logger.warning(f"   -> Falha extrair texto de {item_path_log}. Pulando.")
+                            continue
+                    else:
+                        logger.warning(f"   -> Falha download/export {item_path_log}. Pulando.")
+                        continue
+                except Exception as doc_proc_err:
+                    logger.error(f"   -> Erro processando documento {item_path_log}: {doc_proc_err}", exc_info=True)
+                    overall_success = False 
+            elif mime_type in VIDEO_MIME_TYPES:
+                file_size_mb = int(item.get('size', 0)) / (1024 * 1024)
+                logger.info(f"  VÍDEO MODIFICADO/NOVO: {item_path_log} ({file_size_mb:.2f} MB)")
+                if not can_download:
+                     logger.warning(f"   -> Sem permissão download vídeo {item_path_log}. Pulando.")
+                     continue
+                if dry_run: continue
+                downloaded_video_path = None
+                try:
+                    logger.debug(f"   -> Baixando vídeo (ID: {file_id})...")
+                    file_content_bytes = download_file(service, file_id)
+                    if file_content_bytes:
+                        temp_dir_base = tempfile.gettempdir()
+                        run_temp_dir = os.path.join(temp_dir_base, f"gdrive_videos_{uuid.uuid4().hex[:8]}")
+                        os.makedirs(run_temp_dir, exist_ok=True)
+                        temp_video_suffix = os.path.splitext(file_name)[1] or '.mp4'
+                        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', file_name)
+                        temp_video_path = os.path.join(run_temp_dir, f"{uuid.uuid4().hex}{temp_video_suffix}")
+                        logger.debug(f"   -> Salvando vídeo {safe_filename} em {temp_video_path}")
+                        with open(temp_video_path, 'wb') as temp_video_file:
+                            temp_video_file.write(file_content_bytes)
+                        downloaded_video_path = temp_video_path
+                        logger.info(f"   -> Vídeo {safe_filename} baixado para {downloaded_video_path}")
+                        logger.info(f"   -> Iniciando transcrição para {downloaded_video_path}...")
+                        from ingestion.video_transcription import process_video
+                        transcription_result = process_video(downloaded_video_path)
+                        if transcription_result and transcription_result.get("text"): 
+                            logger.info(f"   -> Transcrição de {safe_filename} concluída.")
+                            file_data_for_chunking = {
+                                "content": transcription_result.get("text"), 
+                                "metadata": create_metadata(item, folder_path_log)
+                            }
+                        else:
+                             logger.warning(f"   -> Falha/transcrição vazia {safe_filename}. Pulando.")
+                             continue 
+                    else:
+                        logger.warning(f"   -> Falha download vídeo {item_path_log}. Pulando.")
+                        continue
+                except OSError as os_err:
+                     if os_err.errno == 28: 
+                          logger.error(f"   -> ERRO ESPAÇO EM DISCO vídeo {item_path_log} em {downloaded_video_path}: {os_err}", exc_info=False)
+                     else:
+                          logger.error(f"   -> Erro OS vídeo {item_path_log}: {os_err}", exc_info=True)
+                     overall_success = False 
+                except Exception as video_proc_err:
+                     logger.error(f"   -> Erro processando vídeo {item_path_log}: {video_proc_err}", exc_info=True)
+                     overall_success = False
+                finally:
+                     if downloaded_video_path and os.path.exists(downloaded_video_path):
+                          try:
+                              os.remove(downloaded_video_path)
+                              logger.debug(f"   -> Vídeo temp removido: {downloaded_video_path}")
+                          except OSError as e:
+                              logger.error(f"   -> Erro remover vídeo temp {downloaded_video_path}: {e}")
+            elif is_supported_image(item):
+                logger.info(f"  IMAGEM SUPORTADA MODIFICADA/NOVA: {item_path_log} (Pulando)")
+                continue
+            else:
+                logger.info(f"  -> Ignorando tipo não suportado modificado/novo: {item_path_log} (Tipo: {mime_type})")
+                continue
+
+            if file_data_for_chunking and supabase_client:
+                content_to_chunk = file_data_for_chunking.get("content")
+                metadata_for_chunks = file_data_for_chunking.get("metadata", {})
+                source_name_log = metadata_for_chunks.get("source_name", file_id)
+                doc_uuid = str(uuid.uuid4())
+                metadata_for_chunks['document_id'] = doc_uuid
+
+                if content_to_chunk:
+                    logger.info(f"  Chunking para {source_name_log} (Doc ID: {doc_uuid})...")
+                    chunks = split_content_into_chunks(
+                        content_to_chunk,
+                        metadata_for_chunks, 
+                        max_chunk_tokens=2048, 
+                        min_chunk_chars=300,
+                        model_name=os.getenv("OPENAI_MODEL", "gpt-4o")
+                    )
+                    if chunks:
+                        logger.info(f"  Salvando {len(chunks)} chunks para {source_name_log} (Doc ID: {doc_uuid}) Supabase...")
+                        save_success = _insert_initial_chunks_supabase(supabase_client, chunks, source_name_log)
+                        if save_success:
+                            logger.info(f"  Chunks para {source_name_log} (Doc ID: {doc_uuid}) salvos. Marcando arquivo.")
+                            try:
+                                @default_retry
+                                def mark_file_db_processed(cli, f_id):
+                                    return cli.table('processed_files').insert({"file_id": f_id}).execute()
+                                mark_response = mark_file_db_processed(supabase_client, file_id)
+                                logger.info(f"  -> Arquivo {source_name_log} (ID: {file_id}) marcado em 'processed_files'.")
+                            except PostgrestAPIError as mark_api_err:
+                                if 'duplicate key value violates unique constraint \"processed_files_pkey\"' in str(mark_api_err.message):
+                                    logger.warning(f"  -> Arquivo {source_name_log} (ID: {file_id}) já marcado (concorrência?).")
+                                else:
+                                    logger.error(f"  -> Falha marcar {source_name_log} (Erro API Supabase): {mark_api_err.message}", exc_info=False)
+                                    overall_success = False 
+                            except Exception as mark_err:
+                                logger.error(f"  -> Erro inesperado marcar {source_name_log}: {mark_err}", exc_info=True)
+                                overall_success = False
+                        else:
+                            logger.error(f"  Falha salvar chunks para {source_name_log} (Doc ID: {doc_uuid}). NÃO marcado.")
+                            overall_success = False 
+                    else:
+                        logger.warning(f"  Nenhum chunk gerado para {source_name_log} (Doc ID: {doc_uuid}).")
+                else:
+                    logger.warning(f"  Conteúdo vazio para {source_name_log} antes do chunking.")
+            elif not supabase_client:
+                logger.warning("  Supabase client não configurado. Pulando save/marcação.")
+                overall_success = False 
+                
+    # 6. Marcar a Pasta como Processada (Atualizar Timestamp)
+    # MODIFICAÇÃO: Lógica aprimorada para decidir quando marcar/atualizar
+    should_mark_folder = overall_success and (folder_modified_since_last_check or last_processed_at is None)
+    
+    if should_mark_folder and not dry_run and supabase_client:
+        logger.info(f"[{folder_path_log}] Tentando marcar/atualizar pasta no cache (ID: {folder_id}).")
         mark_success = mark_folder_processed(supabase_client, folder_id, folder_name)
         if mark_success:
-            # Adicionar ao cache em memória também
             processed_folders.add(folder_id)
+            logger.info(f"[{folder_path_log}] Pasta marcada/atualizada com sucesso no cache.")
         else:
-            # Se falhar ao marcar como processada, não afeta o resultado geral
-            logger.warning(f"Não foi possível marcar pasta {folder_name} como processada, mas os arquivos foram processados.")
+            logger.error(f"[{folder_path_log}] FALHA CRÍTICA marcar/atualizar pasta {folder_id} no cache.")
+            overall_success = False # Falha na marcação final invalida o sucesso
+    elif not overall_success:
+         logger.warning(f"[{folder_path_log}] Pulando marcação/atualização da pasta devido a erros críticos.")
+    # Se should_mark_folder for False porque não houve modificações, não logar nada.
     
-    logger.info(f"Ingestão da pasta {folder_path_log} concluída.")
+    logger.info(f"[{folder_path_log}] Ingestão da pasta concluída. Status: {'Sucesso' if overall_success else 'Falha'}")
     return overall_success
 
-def create_metadata(item: Dict[str, Any]) -> Dict[str, Any]:
+
+def create_metadata(item: Dict[str, Any], current_path: str) -> Dict[str, Any]:
     """Cria um dicionário de metadados padronizado a partir do item do GDrive."""
+    file_id = item.get("id")
+    file_name = item.get("name")
+    source_url = f"gdrive://{os.path.join(current_path, file_name)}" if current_path else f"gdrive://{file_name}"
+    
     return {
-        "source_name": item.get("name"),
-        "gdrive_id": item.get("id"),
+        "source_name": file_name,
+        "source_url": source_url, 
+        "gdrive_id": file_id,
         "mime_type": item.get("mimeType"),
         "gdrive_parent_id": item.get("parents", [None])[0],
         "created_time": item.get("createdTime"),
@@ -892,6 +962,9 @@ def ingest_all_gdrive_content(dry_run=False):
         logger.critical("Falha ao autenticar na API do Google Drive. Abortando ingestão.")
         return None
 
+    processed_folders.clear()
+    logger.info("Cache de pastas em memória limpo para nova execução.")
+
     for folder_id in root_folder_ids:
         try:
             folder_metadata = service.files().get(fileId=folder_id, fields='id, name, capabilities').execute()
@@ -900,13 +973,14 @@ def ingest_all_gdrive_content(dry_run=False):
 
             ingest_successful = ingest_gdrive_folder(
                 service=service,
-                folder_name=folder_name,
+                folder_name=folder_name, 
                 folder_id=folder_id,
                 dry_run=dry_run,
-                access_level=None
+                access_level=None,
+                current_path="" 
             )
             if not ingest_successful:
-                logger.warning(f"Houve falhas ao processar/salvar itens na pasta '{folder_name}' (ID: {folder_id}). Verifique logs anteriores.")
+                logger.warning(f"Houve falhas ao processar/salvar itens na pasta raiz '{folder_name}' (ID: {folder_id}). Verifique logs anteriores.")
         except HttpError as error:
             logger.error(f"Erro HTTP ao processar pasta raiz {folder_id}: {error}", exc_info=True)
         except Exception as e:
