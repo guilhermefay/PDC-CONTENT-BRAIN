@@ -178,29 +178,41 @@ def check_folder_processed(supabase_cli: Client, folder_id: str) -> Optional[dat
     try:
         # Chama a função RPC no Supabase
         # A RPC deve retornar um único valor de timestamp ou NULL
-        response = supabase_cli.rpc('check_processed_folder', {'folder_id_param': folder_id}).execute()
-        
-        # A resposta da RPC para uma função que retorna um único valor escalar
-        # geralmente tem os dados diretamente no atributo 'data'.
-        if response.data:
-            # Tentar converter a string de timestamp para datetime
+        logger.debug(f"[RPC DEBUG] Chamando check_processed_folder para {folder_id}")
+        response: PostgrestAPIResponse = supabase_cli.rpc('check_processed_folder', {'folder_id_param': folder_id}).execute()
+        logger.debug(f"[RPC DEBUG] Resposta crua da RPC para {folder_id}: data={response.data}, count={response.count}, status_code={response.status_code}")
+
+        # Nova lógica de extração - mais robusta
+        timestamp_data = response.data
+        timestamp_str = None
+
+        # Verificar se data não é None e não está vazia (pode ser lista? escalar?)
+        if timestamp_data:
+            # Se for uma lista, pegar o primeiro elemento (comum em algumas libs)
+            if isinstance(timestamp_data, list):
+                if len(timestamp_data) > 0:
+                    timestamp_str = timestamp_data[0]
+                else:
+                    logger.debug(f"[RPC DEBUG] RPC retornou lista vazia para {folder_id}.")
+            # Se não for lista, assumir que é o valor escalar direto
+            elif isinstance(timestamp_data, str):
+                 timestamp_str = timestamp_data
+            else:
+                 logger.warning(f"[RPC DEBUG] Formato inesperado para response.data ({type(timestamp_data)}) para {folder_id}. Valor: {timestamp_data}")
+
+        # Processar a string de timestamp se encontrada
+        if timestamp_str:
             try:
-                timestamp_str = response.data
-                # Ajustar para o formato de timestamp que o Supabase retorna (pode incluir 'Z' ou offset)
-                # Exemplo: '2023-10-27T10:30:00+00:00' ou '2023-10-27T10:30:00Z'
-                if isinstance(timestamp_str, str):
-                    dt_object = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    logger.info(f"Pasta {folder_id} encontrada no cache. Último processamento: {dt_object.isoformat()}")
-                    return dt_object
-                else: # Se já for um objeto datetime (menos provável via RPC básica)
-                    logger.info(f"Pasta {folder_id} encontrada no cache. Último processamento (objeto dt): {timestamp_str.isoformat()}")
-                    return timestamp_str
+                dt_object = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                logger.info(f"Pasta {folder_id} encontrada no cache. Último processamento: {dt_object.isoformat()}")
+                return dt_object
             except ValueError as ve:
-                logger.error(f"Erro ao converter timestamp '{response.data}' para datetime para pasta {folder_id}: {ve}")
-                return None # Indica que houve um problema com o formato do timestamp
+                logger.error(f"[RPC DEBUG] Erro ao converter timestamp string '{timestamp_str}' para datetime para pasta {folder_id}: {ve}")
+                return None # Indica erro no formato do timestamp
         else:
-            # logger.info(f"Pasta {folder_id} não encontrada no cache de pastas processadas ou RPC retornou NULL.")
-            return None # Pasta não encontrada ou RPC retornou NULL
+            # Se timestamp_str continua None, significa que não foi encontrado/retornado
+            logger.info(f"Pasta {folder_id} não encontrada no cache ou RPC retornou NULL/vazio.")
+            return None
             
     except PostgrestAPIError as api_error:
         # Se a tabela ou função não existir, tratar como "não processada"
