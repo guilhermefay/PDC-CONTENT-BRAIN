@@ -1,55 +1,31 @@
-# Use uma imagem base Python adequada
+# Usa a imagem base Python 3.11 slim
 FROM python:3.11-slim
 
-# Define o diretório de trabalho dentro do contêiner
+# Define o diretório de trabalho no container
 WORKDIR /app
 
-# Garante que /app esteja no PYTHONPATH
+# Define a variável de ambiente para o caminho Python
 ENV PYTHONPATH=/app
 
-# Copia o arquivo de requisitos e instala as dependências
-COPY worker_service/requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r /app/requirements.txt
+# Copia o arquivo de dependências primeiro para aproveitar o cache do Docker
+COPY requirements.txt .
 
-# Cria a estrutura de diretórios adequada para o worker
-RUN mkdir -p /app/ingestion /app/etl /app/infra /app/agents
+# Instala as dependências
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia os diretórios necessários do worker_service para /app
-COPY worker_service/ingestion/ /app/ingestion/
-COPY worker_service/etl/ /app/etl/
-COPY worker_service/infra/ /app/infra/
-COPY worker_service/agents/ /app/agents/
-
-# Copia os arquivos na raiz necessários para o worker
-COPY worker_service/rag_api.py /app/rag_api.py
-COPY worker_service/__init__.py /app/__init__.py
-
-# Copia o script de diagnóstico para verificar imports
-COPY check_imports.py /app/check_imports.py
-RUN chmod +x /app/check_imports.py
-
-# Copia o script de entrypoint
+# Copia o script de entrypoint e o script de verificação de imports
 COPY worker_entrypoint.sh /app/worker_entrypoint.sh
+COPY check_imports.py /app/check_imports.py
+
+# Copia todo o código da aplicação para o diretório /app/
+# Certifique-se de que a estrutura de diretórios referenciada no seu código 
+# (ex: agents, ingestion, etl) esteja presente na raiz do seu projeto
+# para ser copiada corretamente.
+COPY . /app/
+
+# Dá permissão de execução para o script de entrypoint
 RUN chmod +x /app/worker_entrypoint.sh
 
-# Diretórios extras para depuração - podem ser removidos se não forem necessários
-RUN mkdir -p /app/storage/ingest_output
-RUN mkdir -p /app/logs
-
-# Configurar permissões para os diretórios de saída
-RUN chmod -R 777 /app/storage /app/logs
-
-# ============================================================
-# NOTAS DE CONFIGURAÇÃO NO RAILWAY:
-# ============================================================
-# 1. Usar este Dockerfile diretamente no serviço (Dockerfile.etl)
-# 2. NÃO usar rootDirectory, apenas apontar para este Dockerfile exato
-# 3. Configurar volume para /app/storage para persistência
-# 4. Verificar imports: python check_imports.py (durante o deploy)
-# 5. Versão corrigida com parâmetros para run_annotation_pipeline
-
-# Executar verificação de imports durante o build para garantir que tudo está correto
-# RUN echo "Verificando imports do worker..." && python /app/check_imports.py
-
-# Define o comando padrão para rodar a aplicação
-ENTRYPOINT ["/app/worker_entrypoint.sh"]
+# O comando de start será definido pela configuração do serviço no Railway
+# (RAILWAY_START_COMMAND ou Start Command nas configurações do serviço),
+# que deve ser algo como "/app/worker_entrypoint.sh" ou "sh /app/worker_entrypoint.sh"
