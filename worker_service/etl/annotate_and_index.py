@@ -126,31 +126,41 @@ def tenacity_retry():
         retry=retry_if_exception_type(RETRYABLE_EXCEPTIONS),
     )
 
-def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
-    """Converte valores não‑hasháveis (ex.: slice) em string recursivamente."""
-    if not meta or not isinstance(meta, dict):
-        return {} if meta is None else meta
-        
-    clean: Dict[str, Any] = {}
-    for k, v in meta.items():
-        if isinstance(v, slice):
-            clean[k] = str(v)
-        elif isinstance(v, dict):
-            clean[k] = _sanitize_metadata(v) # Chamada recursiva para dicionários aninhados
-        elif isinstance(v, list):
-             # Processa listas recursivamente (caso contenham dicts ou slices)
-             clean[k] = [_sanitize_metadata(item) if isinstance(item, dict) 
-                         else str(item) if isinstance(item, slice) 
-                         else item for item in v]
+def _sanitize_metadata(item_to_sanitize: Any) -> Any:
+    """
+    Sanitiza recursivamente um item para garantir que seja serializável em JSON
+    e que valores não hasheáveis sejam convertidos em string.
+    Particularmente útil para metadados que podem conter slices ou dicts aninhados.
+    """
+    if isinstance(item_to_sanitize, dict):
+        clean_dict: Dict[str, Any] = {}
+        for k, v_item in item_to_sanitize.items():
+            clean_dict[k] = _sanitize_metadata(v_item) # Sanitiza o valor recursivamente
+        return clean_dict
+    elif isinstance(item_to_sanitize, list):
+        clean_list: List[Any] = []
+        for v_item in item_to_sanitize:
+            clean_list.append(_sanitize_metadata(v_item)) # Sanitiza o item da lista recursivamente
+        return clean_list
+    elif isinstance(item_to_sanitize, slice):
+        return str(item_to_sanitize)
+    else:
+        # Para todos os outros tipos, verifica se é serializável em JSON.
+        # Tipos básicos (str, int, float, bool, None) são ok.
+        # Para outros objetos, a conversão para string é mais segura.
+        if isinstance(item_to_sanitize, (str, int, float, bool, type(None))):
+            return item_to_sanitize
         else:
-            # Mantém outros tipos hasheáveis como estão
+            # Tenta converter para string se não for um tipo JSON básico ou se falhar o hash (indicando objeto complexo).
             try:
-                hash(v) # Verifica se é hasheável
-                clean[k] = v
+                # Esta chamada de hash é apenas para forçar um TypeError se o objeto for complexo e não hasheável.
+                # Não usamos o resultado do hash.
+                hash(item_to_sanitize)
+                # Se for hasheável mas não um tipo JSON básico (ex: datetime), converte para str.
+                return str(item_to_sanitize)
             except TypeError:
-                clean[k] = str(v) # Converte para string se não for hasheável
-    return clean
-
+                # Não hasheável, converte para string.
+                return str(item_to_sanitize)
 
 # ---------------------------------------------------------------------------
 # Supabase helpers
@@ -200,8 +210,9 @@ def _run_annotation(annotator: AnnotatorAgent, chunk: Dict[str, Any]) -> Optiona
 
 @tenacity_retry()
 async def _upload_chunk_r2r(chunk: Dict[str, Any]):
-    doc_id = chunk.get("document_id", "temp_doc_id_" + str(uuid.uuid4())) # Garantir que doc_id sempre tenha um valor
-    logger.info(f"[UPLOAD_API] Iniciando envio de chunks para API para documento {doc_id}")
+    # Renomear doc_id para current_chunk_specific_id para clareza
+    current_chunk_specific_id = chunk.get("document_id", "temp_chunk_id_" + str(uuid.uuid4()))
+    logger.info(f"[UPLOAD_API] Iniciando tentativa de envio de chunk {current_chunk_specific_id} para API R2R.")
     
     if not r2r_client:
         logger.warning("R2R client (wrapper) não está disponível. Pulando envio de chunks para API.")
@@ -213,39 +224,47 @@ async def _upload_chunk_r2r(chunk: Dict[str, Any]):
         # Se 'chunk' aqui representa um *único* chunk que precisa ser enviado,
         # precisamos envolvê-lo em uma lista para o método post_preprocessed_chunks_to_api_service.
         
-        # Assumindo que 'chunk' representa um único pedaço de texto com seus metadados.
-        # E o `annotate_and_index.py` processa um chunk de cada vez para R2R.
-        # O novo endpoint `/internal/v1/ingest_chunks` espera uma *lista* de chunks.
-        # Portanto, vamos enviar este chunk como uma lista de um único item.
-        chunk_content_item = {"content": chunk.get("text_content", chunk.get("content", ""))} # 'text_content' ou 'content'
+        chunk_content_item = {"content": chunk.get("text_content", chunk.get("content", ""))} 
         if not chunk_content_item["content"]:
-            logger.error(f"[UPLOAD_API] Chunk {doc_id} não possui campo 'text_content' ou 'content'. Pulando envio.")
+            logger.error(f"[UPLOAD_API] Chunk {current_chunk_specific_id} não possui campo 'text_content' ou 'content'. Pulando envio.")
             return None
+
+        # Obter o ID do documento original dos metadados
+        # Este é o ID que agrupa todos os chunks de um mesmo arquivo de origem.
+        original_doc_id_from_metadata = chunk.get("metadata", {}).get("original_document_id")
+
+        if not original_doc_id_from_metadata:
+            logger.error(f"[UPLOAD_API] 'original_document_id' não encontrado nos metadados do chunk {current_chunk_specific_id}. Não é possível enviar para API R2R.")
+            return None # Crucial para agrupamento correto no R2R
+
+        logger.info(f"[UPLOAD_API] Documento original para o chunk {current_chunk_specific_id} é {original_doc_id_from_metadata}. Preparando para enviar via R2R API.")
 
         chunks_to_send = [chunk_content_item]
         metadata_to_send = _sanitize_metadata(chunk.get("metadata", {}))
-        # Adicionar document_id aos metadados se não estiver lá, pode ser útil no R2R
-        metadata_to_send.setdefault("original_document_id", doc_id) 
+        # Garantir que o ID específico do chunk esteja nos metadados
+        metadata_to_send.setdefault("chunk_specific_id", current_chunk_specific_id)
+        # O 'original_document_id' já deve estar em metadata_to_send se veio de chunk.get("metadata", {})
+        # 'source' também deve vir dos metadados originais do chunk.
         metadata_to_send.setdefault("source", chunk.get("metadata", {}).get("source_name", "unknown"))
 
         response_data = await r2r_client.post_preprocessed_chunks_to_api_service(
-            document_id=doc_id, # Este é o ID do documento original que gerou o chunk
+            document_id=original_doc_id_from_metadata, # <<< USA O ID ORIGINAL AQUI
             chunks_data=chunks_to_send,
             metadata=metadata_to_send
         )
 
         if response_data and response_data.get("success"):
-            logger.info(f"[UPLOAD_API] Envio de chunks para {doc_id} bem-sucedido. Resposta da API: {response_data.get('response')}")
+            logger.info(f"[UPLOAD_API] Envio de chunks para {current_chunk_specific_id} bem-sucedido. Resposta da API: {response_data.get('response')}")
             return response_data # Retorna o dict de sucesso com a resposta da API
         else:
             error_msg = response_data.get("error", "Erro desconhecido ao enviar chunks para API") if response_data else "Nenhuma resposta do R2RClientWrapper"
-            logger.error(f"[UPLOAD_API] Erro ao enviar chunks para {doc_id} para API: {error_msg}")
+            logger.error(f"[UPLOAD_API] Erro ao enviar chunks para {current_chunk_specific_id} para API: {error_msg}")
             # Não levantar exceção aqui para que o tenacity possa tentar novamente se for um erro de rede
             # Se for um erro de lógica/payload, as tentativas não ajudarão, mas o log registrará.
             return None # Indicar falha
 
     except Exception as e:
-        logger.error(f"[UPLOAD_API] Exceção inesperada ao enviar chunks para {doc_id} para API: {e}", exc_info=True)
+        logger.error(f"[UPLOAD_API] Exceção inesperada ao enviar chunks para {current_chunk_specific_id} para API: {e}", exc_info=True)
         # Logar o contexto do chunk para depuração
         context_log = {k: chunk.get(k) for k in ['document_id', 'annotation_status', 'indexing_status', 'keep', 'metadata'] if k in chunk}
         logger.error(f"Contexto do chunk no momento do erro: {json.dumps(context_log, default=str)}")
