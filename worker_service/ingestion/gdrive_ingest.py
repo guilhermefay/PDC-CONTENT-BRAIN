@@ -174,58 +174,68 @@ def check_folder_processed(supabase_cli: Client, folder_id: str) -> Optional[dat
     if not supabase_cli:
         logger.warning("Cliente Supabase não disponível para verificar pasta processada.")
         return None
-    
+
     try:
         # Chama a função RPC no Supabase
         # A RPC deve retornar um único valor de timestamp ou NULL
         logger.debug(f"[RPC DEBUG] Chamando check_processed_folder para {folder_id}")
-        response: PostgrestAPIResponse = supabase_cli.rpc('check_processed_folder', {'folder_id_param': folder_id}).execute()
-        logger.debug(f"[RPC DEBUG] Resposta crua da RPC para {folder_id}: data={response.data}, count={response.count}, status_code={response.status_code}")
+        response = supabase_cli.rpc(
+            "check_processed_folder", {"folder_id_param": folder_id}
+        ).execute()
+        logger.debug(f"[RPC DEBUG] Resposta RPC crua para {folder_id}: {response}")
 
-        # Nova lógica de extração - mais robusta
-        timestamp_data = response.data
+        # Processar a resposta - pode ser uma lista ou um valor direto
         timestamp_str = None
+        # O atributo 'data' contém o resultado da RPC
+        if isinstance(response.data, list) and len(response.data) > 0:
+             # Supabase pode retornar [{'check_processed_folder': 'timestamp'}] ou similar
+             if isinstance(response.data[0], dict):
+                 # Try accessing the function name as key
+                 func_name = "check_processed_folder"
+                 if func_name in response.data[0]:
+                     timestamp_str = response.data[0][func_name]
+                 else: # Fallback if key is different or just the value is returned in dict
+                     timestamp_str = list(response.data[0].values())[0] if response.data[0] else None
+             else: # Fallback if it's just a list of values
+                 timestamp_str = response.data[0]
+        elif not isinstance(response.data, list): # Handle direct value return
+             timestamp_str = response.data # Assuming data directly holds the timestamp or None
 
-        # Verificar se data não é None e não está vazia (pode ser lista? escalar?)
-        if timestamp_data:
-            # Se for uma lista, pegar o primeiro elemento (comum em algumas libs)
-            if isinstance(timestamp_data, list):
-                if len(timestamp_data) > 0:
-                    timestamp_str = timestamp_data[0]
-                else:
-                    logger.debug(f"[RPC DEBUG] RPC retornou lista vazia para {folder_id}.")
-            # Se não for lista, assumir que é o valor escalar direto
-            elif isinstance(timestamp_data, str):
-                 timestamp_str = timestamp_data
-            else:
-                 logger.warning(f"[RPC DEBUG] Formato inesperado para response.data ({type(timestamp_data)}) para {folder_id}. Valor: {timestamp_data}")
+        # Log the extracted timestamp string
+        logger.debug(f"[RPC DEBUG] Timestamp string extraído para {folder_id}: {timestamp_str}")
 
-        # Processar a string de timestamp se encontrada
         if timestamp_str:
             try:
-                dt_object = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                logger.info(f"Pasta {folder_id} encontrada no cache. Último processamento: {dt_object.isoformat()}")
-                return dt_object
-            except ValueError as ve:
-                logger.error(f"[RPC DEBUG] Erro ao converter timestamp string '{timestamp_str}' para datetime para pasta {folder_id}: {ve}")
-                return None # Indica erro no formato do timestamp
+                # Tenta converter para datetime, tratando timezone 'Z' ou offset
+                if isinstance(timestamp_str, str):
+                     # Remove 'Z' if present (indicates UTC)
+                     if timestamp_str.endswith('Z'):
+                         timestamp_str = timestamp_str[:-1] + '+00:00'
+                     # Handle potential timezone offsets like +00, +00:00 etc.
+                     dt = isoparse(timestamp_str)
+                     # Ensure it's timezone-aware (UTC)
+                     if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+                         dt = dt.replace(tzinfo=timezone.utc)
+                     else:
+                         dt = dt.astimezone(timezone.utc) # Convert non-UTC to UTC
+                     logger.debug(f"[RPC DEBUG] Timestamp convertido para datetime para {folder_id}: {dt}")
+                     return dt
+                else:
+                    logger.warning(f"[RPC DEBUG] Timestamp extraído para {folder_id} não é uma string: {timestamp_str} (Tipo: {type(timestamp_str)})")
+
+            except ValueError as e:
+                logger.error(f"Erro ao converter timestamp '{timestamp_str}' para datetime para pasta {folder_id}: {e}")
         else:
-            # Se timestamp_str continua None, significa que não foi encontrado/retornado
-            logger.info(f"Pasta {folder_id} não encontrada no cache ou RPC retornou NULL/vazio.")
-            return None
-            
-    except PostgrestAPIError as api_error:
-        # Se a tabela ou função não existir, tratar como "não processada"
-        if (
-            ("relation \"processed_folders\" does not exist" in str(api_error.message).lower()) or
-            ("function public.check_processed_folder" in str(api_error.message).lower() and "does not exist" in str(api_error.message).lower())
-        ):
-            logger.warning(f"Tabela 'processed_folders' ou função RPC 'check_processed_folder' não existe. Assumindo que a pasta {folder_id} não foi processada.")
-            return None # Trata como não processada para permitir a criação e processamento inicial
-        logger.error(f"Erro API Supabase ao chamar RPC check_processed_folder para {folder_id}: {api_error.message}", exc_info=True)
-        return None # Em caso de outros erros de API, assumir que não foi processada para segurança
-    except Exception as check_err:
-        logger.error(f"Erro inesperado ao chamar RPC check_processed_folder para pasta {folder_id}: {check_err}", exc_info=True)
+             logger.debug(f"[RPC DEBUG] Nenhum timestamp retornado pela RPC para {folder_id}.")
+
+        return None
+
+    except PostgrestAPIError as e:
+        logger.error(f"Erro de API Supabase ao chamar RPC check_processed_folder para pasta {folder_id}: {e.message} (Code: {e.code}, Details: {e.details}, Hint: {e.hint})")
+        return None
+    except Exception as e:
+        # Log do erro inesperado, incluindo traceback
+        logger.error(f"Erro inesperado ao chamar RPC check_processed_folder para pasta {folder_id}: {e}", exc_info=True)
         return None
 
 # --- NOVA FUNÇÃO: Marcar pasta como processada ---
@@ -661,9 +671,7 @@ def ingest_gdrive_folder(
     # 2. Verificar Cache Persistente (Supabase) e obter Timestamp
     last_processed_at: Optional[datetime] = None
     if supabase_client:
-        logger.info(f"[CACHE DEBUG] Verificando cache persistente para pasta ID: {folder_id}")
         last_processed_at = check_folder_processed(supabase_client, folder_id)
-        logger.info(f"[CACHE DEBUG] Resultado de check_folder_processed para {folder_id}: {last_processed_at} (Tipo: {type(last_processed_at)})")
     else:
         logger.debug(f"[{folder_path_log}] Cliente Supabase não disponível, cache persistente desabilitado.")
 
@@ -672,23 +680,22 @@ def ingest_gdrive_folder(
     query_description = "Buscando todos os itens"
 
     if last_processed_at:
-        # MODIFICAÇÃO: Adiciona filtro modifiedTime se a pasta já foi processada
-        try:
-            timestamp_iso = last_processed_at.isoformat(timespec='milliseconds') + 'Z'
-            gdrive_query += f" and modifiedTime > '{timestamp_iso}'"
-            query_description = f"Buscando itens modificados desde {timestamp_iso}"
-            logger.info(f"[{folder_path_log}] Pasta encontrada no cache. {query_description}.")
-            logger.info(f"[QUERY DEBUG] Query construída (com timestamp): {gdrive_query}")
-        except AttributeError as e:
-            logger.error(f"[CACHE DEBUG] Erro ao formatar timestamp {last_processed_at} para pasta {folder_id}: {e}. Usando query completa.")
-            # Resetar query para buscar tudo em caso de erro no timestamp
-            gdrive_query = f"'{folder_id}' in parents and trashed = false"
-            query_description = "Buscando todos os itens (fallback após erro timestamp)"
-            logger.info(f"[{folder_path_log}] {query_description}.")
-            logger.info(f"[QUERY DEBUG] Query construída (fallback): {gdrive_query}")
+        # Adiciona filtro modifiedTime se a pasta já foi processada antes
+        # Formata o timestamp para o formato RFC3339 exigido pela API do Drive
+        timestamp_iso = last_processed_at.isoformat()
+        # Garante que está no formato UTC com 'Z'
+        if timestamp_iso.endswith('+00:00'):
+             timestamp_iso = timestamp_iso[:-6] + 'Z'
+        elif not timestamp_iso.endswith('Z'):
+             # Se não for UTC ou Z, algo está errado, mas tentamos formatar
+             logger.warning(f"Timestamp {last_processed_at} não parece ser UTC. Formatando para ISO e adicionando 'Z'.")
+             timestamp_iso = last_processed_at.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z' # Millisecond precision with Z
+
+        gdrive_query += f" and modifiedTime > '{timestamp_iso}'"
+        query_description = f"Buscando itens modificados desde {timestamp_iso}"
+        logger.info(f"[{folder_path_log}] Pasta encontrada no cache (processada em {last_processed_at}). {query_description}")
     else:
-        logger.info(f"[{folder_path_log}] Pasta não encontrada no cache persistente. {query_description}.")
-        logger.info(f"[QUERY DEBUG] Query construída (sem timestamp): {gdrive_query}")
+        logger.info(f"[{folder_path_log}] Pasta não encontrada no cache persistente. {query_description}")
 
     # 4. Listar Arquivos/Subpastas usando a Query
     overall_success = True
