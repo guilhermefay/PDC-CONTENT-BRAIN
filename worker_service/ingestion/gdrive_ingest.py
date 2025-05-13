@@ -38,6 +38,9 @@ import re
 import time
 from dateutil.parser import isoparse
 
+# Adicionar importação do pipeline de anotação/indexação
+from etl.annotate_and_index import run_pipeline as run_annotation_pipeline
+
 # ATENÇÃO: Indentação revisada em 2024-06-10 para corrigir erros de execução Python.
 # Se encontrar problemas de indentação, revisar este bloco!
 
@@ -1040,6 +1043,17 @@ def main():
         logger.info("*** EXECUTANDO EM MODO DRY-RUN ***")
 
     ingest_all_gdrive_content(dry_run=args.dry_run)
+
+    # Executar o pipeline de anotação e indexação
+    logger.info("Iniciando pipeline de anotação e indexação...")
+    try:
+        # Chamar com os parâmetros padrão. Ajustar se necessário.
+        # Ex: run_annotation_pipeline(batch_size=10, max_workers=2, skip_annotation=True)
+        run_annotation_pipeline() 
+        logger.info("Pipeline de anotação e indexação concluído.")
+    except Exception as e:
+        logger.error(f"Erro ao executar o pipeline de anotação e indexação: {e}", exc_info=True)
+
 
     # Manter o processo ativo para o Railway
     logger.info("Processamento principal concluído. Mantendo o worker ativo...")
