@@ -36,6 +36,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 import base64
 import re
 import time
+from dateutil.parser import isoparse
 
 # ATENÇÃO: Indentação revisada em 2024-06-10 para corrigir erros de execução Python.
 # Se encontrar problemas de indentação, revisar este bloco!
