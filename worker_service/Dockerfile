@@ -16,6 +16,8 @@ COPY etl ./etl
 RUN ls -la /app
 COPY infra ./infra
 RUN ls -la /app
+COPY agents ./agents
+RUN ls -la /app
 
 # Remove o comando CMD de start para usar um ENTRYPOINT de debug
 # O ENTRYPOINT manterá o contêiner rodando para inspeção, permitindo ver os logs de build e o ambiente interno.
