@@ -497,7 +497,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
 def main():
     parser = argparse.ArgumentParser(description="Pipeline ETL RAG Supabase → CrewAI → R2R")
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("ETL_BATCH_SIZE", 100)), help="Número de chunks a processar por lote.")
-    parser.add_argument("--max-workers", type=int, default=int(os.getenv("ETL_MAX_WORKERS", 2)), help="Número máximo de threads paralelas.")
+    parser.add_argument("--max-workers", type=int, default=int(os.getenv("ETL_MAX_WORKERS", 1)), help="Número máximo de threads paralelas.")
     parser.add_argument("--skip-annotation", action="store_true", help="Pular etapa de anotação.")
     parser.add_argument("--skip-indexing", action="store_true", help="Pular etapa de indexação.")
     args = parser.parse_args()
