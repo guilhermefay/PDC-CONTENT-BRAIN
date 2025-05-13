@@ -241,7 +241,7 @@ app = FastAPI(
 async def query_documents(
     request: QueryRequest,
     token_payload: dict = Depends(validate_token)
-) -> Union[QuerySearchResponse, QueryRagResponse]: # Tipo de retorno atualizado
+) -> Union[QuerySearchResponse, QueryRagResponse]:
     """
     Endpoint principal para buscar documentos ou executar RAG.
 
@@ -276,17 +276,17 @@ async def query_documents(
         start_time = time.time()
 
         # Determinar nível de acesso do usuário a partir do token
-        user_role = token_payload.get('app_metadata', {}).get('role', 'student') # Assumir 'student' como padrão
+        user_role = token_payload.get('app_metadata', {}).get('role', 'student')
         user_id = token_payload.get('sub')
         logging.info(f"User {user_id} accessing with role: {user_role}")
 
         # Construir filtros R2R
         final_filters = request.filters.copy() if request.filters else {}
-        if user_role not in ['admin', 'internal_user']: # Apenas estudantes veem conteúdo 'student'
+        if user_role not in ['admin', 'internal_user']:
             final_filters['access_level'] = 'student'
             logging.info("Applying 'access_level=student' filter for user.")
         else:
-             logging.info("Internal user/admin detected, no access level filter applied.")
+            logging.info("Internal user/admin detected, no access level filter applied.")
 
         # Remover filtros vazios, se houver (opcional, dependendo do R2R)
         final_filters = {k: v for k, v in final_filters.items() if v is not None}
@@ -295,11 +295,11 @@ async def query_documents(
 
         if request.use_rag:
             # --- Lógica RAG --- 
-            logging.info(f"Sending RAG query to R2R: '{request.query}' with k={request.top_k}, Filters: {final_filters}") # Usar final_filters
+            logging.info(f"Sending RAG query to R2R: '{request.query}' with k={request.top_k}, Filters: {final_filters}")
             r2r_rag_data = r2r_client.rag(
                 query=request.query,
                 limit=request.top_k,
-                filters=final_filters, # Usar final_filters
+                filters=final_filters,
                 generation_config=request.generation_config
             )
             
@@ -317,16 +317,16 @@ async def query_documents(
             # Formatar search_results para QueryRagResponse
             formatted_search_results = []
             for res in search_results_raw:
-                 # Adaptação: A resposta RAG pode ter um formato ligeiramente diferente
-                 # Assumindo que `res` é um dicionário do chunk com `text` e `metadata`
-                 content = res.get("text")
-                 metadata = res.get("metadata", {})
-                 doc_id = metadata.get("document_id", "unknown") # Tentar obter IDs
-                 chunk_id = metadata.get("chunk_id", "unknown")
-                 score = res.get("score", 0.0) # Score pode não estar presente no RAG
-                 
-                 if content:
-                     formatted_search_results.append(
+                # Adaptação: A resposta RAG pode ter um formato ligeiramente diferente
+                # Assumindo que `res` é um dicionário do chunk com `text` e `metadata`
+                content = res.get("text")
+                metadata = res.get("metadata", {})
+                doc_id = metadata.get("document_id", "unknown")
+                chunk_id = metadata.get("chunk_id", "unknown")
+                score = res.get("score", 0.0)
+                
+                if content:
+                    formatted_search_results.append(
                         SearchResultChunk(
                             document_id=str(doc_id),
                             chunk_id=str(chunk_id),
@@ -337,7 +337,7 @@ async def query_documents(
                     )
 
             return QueryRagResponse(
-                llm_response=llm_response_text or "", # Garantir que é string
+                llm_response=llm_response_text or "",
                 search_results=formatted_search_results,
                 query_time_ms=query_time_ms
             )
@@ -390,7 +390,7 @@ async def query_documents(
                 query_time_ms=query_time_ms
             )
 
-    except HTTPException as http_exc: # Repassar HTTPExceptions
+    except HTTPException as http_exc:
         raise http_exc
     except Exception as e:
         logging.exception(f"Unexpected error during R2R query processing")

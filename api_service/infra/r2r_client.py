@@ -8,25 +8,21 @@ Uses a RetryHandler for network resilience.
 
 import os
 import logging
-import time # Adicionar importação de time
-import traceback # Adicionar importação de traceback
-import requests # Adicionar importação de requests
-import json # Adicionar importação de json
-import httpx # ADICIONAR ESTA LINHA
+import time
+import traceback
+import requests
+import json
+import httpx
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
-# import r2r # Importar o pacote r2r diretamente
-from r2r import R2RClient, R2RAsyncClient # Corrigido from1 para from; Importar R2RClient e R2RAsyncClient
-# R2RException não foi encontrada na documentação, trataremos exceções genéricas por agora.
-from requests.exceptions import Timeout, ConnectionError as RequestsConnectionError # Corrigido from1 para from e renomeado
+from r2r import R2RClient, R2RAsyncClient
+from requests.exceptions import Timeout, ConnectionError as RequestsConnectionError
 
 # Importar o RetryHandler
-from .resilience import RetryHandler # Corrigido from1 para from
+from .resilience import RetryHandler
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-# Variáveis de ambiente são carregadas dentro da classe agora
 
 # Definir exceções padrão para retry (pode ser movido para config)
 DEFAULT_RETRY_EXCEPTIONS = (Timeout, RequestsConnectionError, httpx.TimeoutException, httpx.ConnectError)
@@ -70,7 +66,7 @@ class R2RClientWrapper:
         # --- END DEBUG ---
 
         self.base_url = os.getenv("R2R_BASE_URL")
-        self.api_key = os.getenv("R2R_API_KEY") # Armazenar a chave lida
+        self.api_key = os.getenv("R2R_API_KEY")
 
         # --- DEBUG: Log Environment Variables Read in __init__ ---
         logger.info(f"__init__ - R2R_BASE_URL read: {self.base_url}")
@@ -84,10 +80,6 @@ class R2RClientWrapper:
             # Permitir inicialização sem API key para endpoints públicos como /health
             # Mas logar um aviso
             logger.warning("R2R_API_KEY not found in environment variables. Authenticated endpoints might fail.")
-            # O SDK provavelmente busca a chave do ambiente se não for passada.
-        # else:
-            # Não precisamos de um else, a inicialização é a mesma
-            # self.client = R2RClient(base_url=self.base_url, api_key=self.api_key) # Usar R2RClient diretamente
         
         # Inicializar o cliente sempre da mesma forma, confiando nas env vars para a API key
         self.client = R2RClient(base_url=self.base_url)
@@ -101,8 +93,8 @@ class R2RClientWrapper:
         # Ou com configurações passadas
         retry_settings = {
             "retries": 3,
-            "initial_delay": 1, # Ajustado para ser consistente com testes
-            "max_delay": 15, # Ajustado para ser consistente com testes
+            "initial_delay": 1,
+            "max_delay": 15,
             "backoff_factor": 2.0,
             "jitter": True,
             "retry_exceptions": DEFAULT_RETRY_EXCEPTIONS
@@ -113,7 +105,6 @@ class R2RClientWrapper:
 
         self.retry_handler = RetryHandler(**retry_settings)
         logger.info(f"RetryHandler instantiated for R2RClientWrapper with settings: {retry_settings}")
-
 
     def health(self) -> bool:
         """
@@ -131,20 +122,19 @@ class R2RClientWrapper:
             response = self.retry_handler.execute(
                 requests.get,
                 health_url,
-                timeout=10 # Adicionar um timeout
+                timeout=10
             )
-            response.raise_for_status() # Lança exceção para status 4xx/5xx
-            health_status = response.json() # Tenta obter o JSON da resposta
-            logger.info(f"R2R health check successful: Response={health_status}") # Log mais informativo
-            # Poderíamos verificar o conteúdo de health_status se necessário
+            response.raise_for_status()
+            health_status = response.json()
+            logger.info(f"R2R health check successful: Response={health_status}")
             return True
-        except (Timeout, RequestsConnectionError) as e: # Exceções tratadas pelo retry handler
+        except (Timeout, RequestsConnectionError) as e:
             logger.error(f"R2R health check failed after retries ({type(e).__name__}): {e}")
             return False
-        except requests.exceptions.RequestException as e: # Outros erros de requests (ex: 4xx, 5xx não retentáveis)
+        except requests.exceptions.RequestException as e:
             logger.error(f"R2R health check failed (RequestException): {e}")
             return False
-        except Exception as e: # Captura outras exceções inesperadas
+        except Exception as e:
             logger.exception(f"An unexpected error occurred during R2R health check: {e}")
             return False
 
@@ -153,7 +143,6 @@ class R2RClientWrapper:
         chunks: List[str],
         document_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        # ingestion_mode: Optional[str] = None, # Poderíamos adicionar se necessário
     ) -> Dict[str, Any]:
         """
         Ingests pre-processed chunks into R2R using the SDK's async documents.create method.
@@ -174,7 +163,6 @@ class R2RClientWrapper:
         # Se o motor R2R self-hosted não usar API key, esta verificação pode ser ajustada.
         if not self.api_key:
             logger.warning("R2R_API_KEY is not configured. Ensure R2R self-hosted engine settings.")
-            # Não vamos falhar aqui, mas é um ponto de atenção.
 
         try:
             # Usar o cliente assíncrono e o método documents.create
@@ -183,36 +171,31 @@ class R2RClientWrapper:
                 chunks=chunks,
                 metadata=metadata or {},
                 id=document_id
-                # ingestion_mode=ingestion_mode, # Adicionar se necessário
             )
             
             # A estrutura exata da resposta para `chunks` precisa ser confirmada ao testar.
             # A documentação do `create` com `file_path` retorna IngestionResponse.
             # Vamos assumir uma estrutura similar ou uma mensagem de sucesso.
             message = "Chunks ingestion task successfully submitted via async client."
-            # Exemplo de como extrair informações se a resposta for um objeto:
-            # new_doc_id = str(response.id) if hasattr(response, 'id') else document_id
             
             logger.info(f"Successfully submitted {len(chunks)} chunks for document_id='{document_id}' via async. R2R Response: {response}")
             return {
                 "message": message,
-                # "document_id": new_doc_id, # Ajustar com base na resposta real
                 "success": True,
-                "raw_response": str(response) # Para debug inicial
+                "raw_response": str(response)
             }
 
         # Idealmente, usaríamos um AsyncRetryHandler aqui para exceções de rede.
         # Por enquanto, tratamento de exceção básico.
-        except httpx.TimeoutException as e: # Supondo que R2RAsyncClient use httpx
-             logger.exception(f"Async chunks ingestion failed for document_id='{document_id}' due to timeout: {e}")
-             return {"error": f"Network Timeout: {str(e)}", "success": False}
-        except httpx.RequestError as e: # Supondo que R2RAsyncClient use httpx
-             logger.exception(f"Async chunks ingestion failed for document_id='{document_id}' due to request error: {e}")
-             return {"error": f"Network Request Error: {str(e)}", "success": False}
+        except httpx.TimeoutException as e:
+            logger.exception(f"Async chunks ingestion failed for document_id='{document_id}' due to timeout: {e}")
+            return {"error": f"Network Timeout: {str(e)}", "success": False}
+        except httpx.RequestError as e:
+            logger.exception(f"Async chunks ingestion failed for document_id='{document_id}' due to request error: {e}")
+            return {"error": f"Network Request Error: {str(e)}", "success": False}
         except Exception as e:
             tb_str = traceback.format_exc()
             logger.exception(f"An unexpected error occurred during async chunks ingestion for document_id='{document_id}': {e}\n{tb_str}")
-            # Se R2RAsyncClient levantar exceções específicas do SDK R2R, capturá-las aqui.
             return {"error": f"SDK Error during async ingestion: {str(e)}", "success": False}
 
     def upload_file(
