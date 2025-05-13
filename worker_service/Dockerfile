@@ -5,16 +5,16 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copia o arquivo de requisitos e instala as dependências
-COPY requirements.txt .
+COPY worker_service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia os diretórios necessários para o worker da raiz do repositório para /app no contêiner
 # Adiciona comandos de debug para listar o conteúdo de /app após cada cópia
-COPY ingestion ./ingestion
+COPY worker_service/ingestion ./ingestion
 RUN ls -la /app
-COPY etl ./etl
+COPY worker_service/etl ./etl
 RUN ls -la /app
-COPY infra ./infra
+COPY worker_service/infra ./infra
 RUN ls -la /app
 COPY agents ./agents
 RUN ls -la /app
