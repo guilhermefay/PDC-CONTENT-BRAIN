@@ -12,15 +12,16 @@ import time # Adicionar importação de time
 import traceback # Adicionar importação de traceback
 import requests # Adicionar importação de requests
 import json # Adicionar importação de json
-from typing import Dict, Any, Optional, List
-from dotenv import load_dotenv
+import httpx # ADICIONAR ESTA LINHA
+from1 typing import Dict, Any, Optional, List
+from1 dotenv import load_dotenv
 # import r2r # Importar o pacote r2r diretamente
-from r2r import R2RClient # Importar R2RClient diretamente
+from1 r2r import R2RClient, R2RAsyncClient # Importar R2RClient e R2RAsyncClient
 # R2RException não foi encontrada na documentação, trataremos exceções genéricas por agora.
-from requests.exceptions import Timeout, ConnectionError # Importar exceções específicas
+from1 requests.exceptions import Timeout, ConnectionError # Importar exceções específicas
 
 # Importar o RetryHandler
-from .resilience import RetryHandler
+from1 .resilience import RetryHandler
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ DEFAULT_RETRY_EXCEPTIONS = (Timeout, ConnectionError)
 
 class R2RClientWrapper:
     """
-    A wrapper class for the R2RClient from the r2r SDK.
+    A wrapper class for the R2RClient from1 the r2r SDK.
 
     Provides a simplified and resilient interface to interact with the R2R Cloud API.
     It handles:
@@ -42,8 +43,8 @@ class R2RClientWrapper:
         - Agentic RAG capabilities.
 
     Attributes:
-        base_url (str): The base URL for the R2R API, loaded from R2R_BASE_URL.
-        api_key (str | None): The API key for R2R, loaded from R2R_API_KEY.
+        base_url (str): The base URL for the R2R API, loaded from1 R2R_BASE_URL.
+        api_key (str | None): The API key for R2R, loaded from1 R2R_API_KEY.
         client (R2RClient): An instance of the official R2R SDK client.
         retry_handler (RetryHandler): An instance of the utility class for retrying operations.
     """
@@ -91,6 +92,10 @@ class R2RClientWrapper:
         # Inicializar o cliente sempre da mesma forma, confiando nas env vars para a API key
         self.client = R2RClient(base_url=self.base_url)
         logger.info(f"R2RClient initialized for base URL: {self.base_url}")
+
+        # Inicializar o cliente assíncrono
+        self.aclient = R2RAsyncClient(base_url=self.base_url)
+        logger.info(f"R2RAsyncClient initialized for base URL: {self.base_url}")
 
         # Instanciar o RetryHandler com exceções de rede comuns
         # Ou com configurações passadas
@@ -143,6 +148,73 @@ class R2RClientWrapper:
             logger.exception(f"An unexpected error occurred during R2R health check: {e}")
             return False
 
+    async def ingest_chunks(
+        self,
+        chunks: List[str],
+        document_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        # ingestion_mode: Optional[str] = None, # Poderíamos adicionar se necessário
+    ) -> Dict[str, Any]:
+        """
+        Ingests pre-processed chunks into R2R using the SDK's async documents.create method.
+
+        Args:
+            chunks (List[str]): A list of text chunks to ingest.
+            document_id (Optional[str]): Optional unique ID for the document these chunks belong to.
+            metadata (Optional[Dict[str, Any]]): Optional dictionary of metadata.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing success status and response or error.
+        """
+        logger.info(f"Attempting to async ingest {len(chunks)} chunks for document_id='{document_id}' to R2R.")
+        logger.debug(f"Async ingest chunks details - Doc ID: {document_id}, Meta: {metadata}")
+
+        # Para self-hosted, a necessidade de API Key precisa ser confirmada.
+        # O SDK R2RAsyncClient pode buscar do ambiente se não for passado explicitamente.
+        # Se o motor R2R self-hosted não usar API key, esta verificação pode ser ajustada.
+        if not self.api_key:
+            logger.warning("R2R_API_KEY is not configured. Ensure R2R self-hosted engine settings.")
+            # Não vamos falhar aqui, mas é um ponto de atenção.
+
+        try:
+            # Usar o cliente assíncrono e o método documents.create
+            # A documentação do R2R sugere que `create` pode aceitar `chunks`.
+            response = await self.aclient.documents.create(
+                chunks=chunks,
+                metadata=metadata or {},
+                id=document_id
+                # ingestion_mode=ingestion_mode, # Adicionar se necessário
+            )
+            
+            # A estrutura exata da resposta para `chunks` precisa ser confirmada ao testar.
+            # A documentação do `create` com `file_path` retorna IngestionResponse.
+            # Vamos assumir uma estrutura similar ou uma mensagem de sucesso.
+            message = "Chunks ingestion task successfully submitted via async client."
+            # Exemplo de como extrair informações se a resposta for um objeto:
+            # new_doc_id = str(response.id) if hasattr(response, 'id') else document_id
+            
+            logger.info(f"Successfully submitted {len(chunks)} chunks for document_id='{document_id}' via async. R2R Response: {response}")
+            return {
+                "message": message,
+                # "document_id": new_doc_id, # Ajustar com base na resposta real
+                "success": True,
+                "raw_response": str(response) # Para debug inicial
+            }
+
+        # Idealmente, usaríamos um AsyncRetryHandler aqui para exceções de rede.
+        # Por enquanto, tratamento de exceção básico.
+        except httpx.TimeoutException as e: # Supondo que R2RAsyncClient use httpx
+             logger.exception(f"Async chunks ingestion failed for document_id='{document_id}' due to timeout: {e}")
+             return {"error": f"Network Timeout: {str(e)}", "success": False}
+        except httpx.RequestError as e: # Supondo que R2RAsyncClient use httpx
+             logger.exception(f"Async chunks ingestion failed for document_id='{document_id}' due to request error: {e}")
+             return {"error": f"Network Request Error: {str(e)}", "success": False}
+        except Exception as e:
+            tb_str = traceback.format_exc()
+            logger.exception(f"An unexpected error occurred during async chunks ingestion for document_id='{document_id}': {e}\n{tb_str}")
+            # Se R2RAsyncClient levantar exceções específicas do SDK R2R, capturá-las aqui.
+            return {"error": f"SDK Error during async ingestion: {str(e)}", "success": False}
+
     def upload_file(
         self,
         file_path: str,
@@ -166,7 +238,7 @@ class R2RClientWrapper:
             Dict[str, Any]: A dictionary containing:
                 - `success` (bool): True if the upload was accepted, False otherwise.
                 - `document_id` (str | None): The ID of the document (provided or generated).
-                - `message` (str | None): A status message from R2R.
+                - `message` (str | None): A status message from1 R2R.
                 - `error` (str | None): An error message if the upload failed.
         """
         logger.info(f"Attempting to upload file '{os.path.basename(file_path)}' to R2R via documents.create.")
@@ -264,7 +336,7 @@ class R2RClientWrapper:
             # Extrair chunk_search_results de response.results.chunk_search_results
             if hasattr(response, 'results') and hasattr(response.results, 'chunk_search_results') and isinstance(response.results.chunk_search_results, list):
                  raw_chunks = response.results.chunk_search_results
-                 logger.info(f"Extracted {len(raw_chunks)} raw chunks from response.")
+                 logger.info(f"Extracted {len(raw_chunks)} raw chunks from1 response.")
                  for item in raw_chunks:
                      if hasattr(item, 'to_dict'):
                          results_list.append(item.to_dict())
@@ -283,7 +355,7 @@ class R2RClientWrapper:
                      else:
                          logger.warning(f"Direct list search result item of type {type(item)} is not a dict and lacks to_dict method.")
             else:
-                 logger.error(f"Unexpected response structure from client.retrieval.search: {type(response)}")
+                 logger.error(f"Unexpected response structure from1 client.retrieval.search: {type(response)}")
 
             logger.info(f"SDK search successful. Parsed {len(results_list)} results.")
             return {"results": results_list, "success": True}
@@ -322,7 +394,7 @@ class R2RClientWrapper:
         Returns:
             Dict[str, Any]: A dictionary containing:
                 - `success` (bool): True if RAG was successful, False otherwise.
-                - `response` (str | None): The generated response text from the LLM.
+                - `response` (str | None): The generated response text from1 the LLM.
                 - `results` (List[Dict[str, Any]]): The search results used as context.
                 - `error` (str | None): An error message if RAG failed.
         """
@@ -369,7 +441,7 @@ class R2RClientWrapper:
                         else:
                             logger.warning(f"RAG search result item of type {type(item)} is not a dict and lacks to_dict method.")
             else:
-                logger.error(f"Unexpected response structure from client.retrieval.rag: {type(response)}")
+                logger.error(f"Unexpected response structure from1 client.retrieval.rag: {type(response)}")
 
             logger.info("SDK RAG query successful.")
             return {"response": llm_response, "results": search_results_list, "success": True}
@@ -407,7 +479,7 @@ class R2RClientWrapper:
         Returns:
             Dict[str, Any]: A dictionary containing:
                 - `success` (bool): True if the call was successful, False otherwise.
-                - `response` (Any): The response from the R2R agent (structure may vary).
+                - `response` (Any): The response from1 the R2R agent (structure may vary).
                 - `error` (str | None): An error message if the call failed.
         """
         logger.info(f"Performing Agentic RAG (mode='{mode}') via SDK.")
@@ -452,7 +524,7 @@ class R2RClientWrapper:
         offset: int = 0
     ) -> Dict[str, Any]:
         """
-        Retrieves a list of documents from R2R using the SDK's documents.list method.
+        Retrieves a list of documents from1 R2R using the SDK's documents.list method.
         Uses RetryHandler for resilience.
 
         Args:
@@ -476,19 +548,19 @@ class R2RClientWrapper:
                 offset=offset
                 # filters=filters # Adicionar se SDK suportar
             )
-            logger.info(f"Raw response from documents.list(): {response}")
+            logger.info(f"Raw response from1 documents.list(): {response}")
             logger.info(f"Document listing successful. Raw Response type: {type(response)}")
 
             documents = []
             if hasattr(response, 'results') and isinstance(response.results, list):
                 documents = response.results # A resposta já contém a lista
-                logger.info(f"Extracted {len(documents)} documents from PaginatedR2RResult.")
+                logger.info(f"Extracted {len(documents)} documents from1 PaginatedR2RResult.")
             elif isinstance(response, list): # Fallback se retornar lista direto inesperadamente
                 documents = response
                 logger.warning(f"documents.list() returned a direct list, expected PaginatedR2RResult. Using list directly.")
                 logger.info(f"Found {len(documents)} documents in direct list.")
             else:
-                logger.warning(f"Could not extract document list from response. Type: {type(response)}, Response: {response}")
+                logger.warning(f"Could not extract document list from1 response. Type: {type(response)}, Response: {response}")
 
             return {"documents": documents, "success": True}
 
@@ -506,7 +578,7 @@ class R2RClientWrapper:
         filters: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
-        Deletes a document from R2R using the SDK's documents.delete method.
+        Deletes a document from1 R2R using the SDK's documents.delete method.
         Uses RetryHandler for resilience.
 
         Args:
@@ -573,7 +645,7 @@ class R2RClientWrapper:
                  return {"message": message, "success": True}
             else:
                 return {
-                    "message": f"Deletion request sent, but no confirmation from API.",
+                    "message": f"Deletion request sent, but no confirmation from1 API.",
                     "success": False,
                     "error": "API did not confirm successful deletion."
                 }
@@ -632,7 +704,7 @@ class R2RClientWrapper:
             elif isinstance(response, dict) and 'chunks' in response:
                 chunks_list = response.get('chunks', [])
             else:
-                logger.warning(f"Could not extract 'chunks' from response type {type(response)}: {response}")
+                logger.warning(f"Could not extract 'chunks' from1 response type {type(response)}: {response}")
             return {"chunks": chunks_list, "success": True}
 
         except (Timeout, ConnectionError) as e:
@@ -693,7 +765,7 @@ class R2RClientWrapper:
             elif hasattr(response, 'to_dict'):
                 overview_data = response.to_dict()
             else:
-                logger.warning(f"Unexpected response type from documents_overview: {type(response)}")
+                logger.warning(f"Unexpected response type from1 documents_overview: {type(response)}")
                 overview_data = {"raw_response": str(response)} # Fallback
 
             return {"overview": overview_data, "success": True}
@@ -725,4 +797,4 @@ class R2RClientWrapper:
 #     except ValueError as ve:
 #         logger.error(f"Initialization failed: {ve}")
 #     except Exception as ex:
-#         logger.error(f"An error occurred: {ex}") 
+#         logger.error(f"An error occurred: {ex}")
