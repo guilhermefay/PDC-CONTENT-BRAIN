@@ -1,0 +1,23 @@
+# Use uma imagem base Python adequada
+FROM python:3.11-slim
+
+# Define o diretório de trabalho dentro do contêiner
+WORKDIR /app
+
+# Garante que /app esteja no PYTHONPATH
+ENV PYTHONPATH /app
+
+# Copia o arquivo de requisitos e instala as dependências
+COPY worker_service/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia os diretórios necessários do worker_service para /app
+COPY worker_service/ingestion ./ingestion
+COPY worker_service/etl ./etl
+COPY worker_service/infra ./infra
+COPY worker_service/rag_api.py .
+COPY worker_service/__init__.py .
+COPY worker_service/agents ./agents
+
+# Define o comando padrão para rodar a aplicação
+CMD ["python", "-m", "ingestion.gdrive_ingest"] 
