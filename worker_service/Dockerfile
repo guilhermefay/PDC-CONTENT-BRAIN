@@ -16,7 +16,7 @@ COPY worker_service/etl ./etl
 RUN ls -la /app
 COPY worker_service/infra ./infra
 RUN ls -la /app
-COPY ./agents ./agents
+COPY ../agents ./agents
 RUN ls -la /app
 
 # Remove o comando CMD de start para usar um ENTRYPOINT de debug
