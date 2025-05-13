@@ -35,6 +35,7 @@ from postgrest.exceptions import APIError as PostgrestAPIError
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 import base64
 import re
+import time
 
 # ATENÇÃO: Indentação revisada em 2024-06-10 para corrigir erros de execução Python.
 # Se encontrar problemas de indentação, revisar este bloco!
@@ -1008,7 +1009,10 @@ def main():
 
     ingest_all_gdrive_content(dry_run=args.dry_run)
 
-    logger.info("Script gdrive_ingest.py finalizado.")
+    # Manter o processo ativo para o Railway
+    logger.info("Processamento principal concluído. Mantendo o worker ativo...")
+    while True:
+        time.sleep(300) # Dorme por 5 minutos
 
 if __name__ == "__main__":
     main()
