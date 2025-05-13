@@ -15,6 +15,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY worker_service/ingestion ./ingestion
 COPY worker_service/etl ./etl
 COPY worker_service/infra ./infra
+
+# Copia o arquivo rag_api.py da api_service para o diretório raiz
+COPY api_service/rag_api.py .
+COPY api_service/__init__.py .
+
 # agents ainda é copiado da raiz do projeto para um diretório agents em /app
 COPY agents ./agents
 
