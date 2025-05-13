@@ -26,5 +26,11 @@ COPY agents ./agents
 # Define o comando padrão para rodar a aplicação
 CMD ["python", "-m", "ingestion.gdrive_ingest"]
 
-# O Root Directory do serviço no Railway DEVE ser configurado para / (RAIZ DO PROJETO)
-# O Start Command na UI do Railway ("python -m ingestion.gdrive_ingest") irá provavelmente sobrescrever este CMD.
+# ============================================================
+# IMPORTANTE: CONFIGURAÇÃO DO RAILWAY
+# ============================================================
+# - Root Directory do serviço: worker_service/
+# - Start Command: python -m ingestion.gdrive_ingest
+#
+# O Railway usará os arquivos dentro da pasta worker_service/
+# com os caminhos relativos dentro dessa pasta.
