@@ -35,7 +35,7 @@ from datetime import datetime, UTC
 import time
 
 # Importar R2RClientWrapper (ajustar caminho se necessário ao executar)
-from infra.r2r_client import R2RClientWrapper
+from infra.r2r_client import R2RClientWrapper 
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
@@ -132,6 +132,34 @@ class HealthCheckResponse(BaseModel):
 
 # Configurar autenticação
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
+
+# Variável de ambiente para a chave de API interna
+INTERNAL_API_KEY_VALUE = os.getenv("INTERNAL_API_KEY")
+
+async def validate_internal_api_key(x_internal_api_key: str = Header(None, alias="X-Internal-API-Key")) -> bool:
+    """
+    Valida a chave de API interna fornecida no header X-Internal-API-Key.
+    """
+    if not INTERNAL_API_KEY_VALUE:
+        logging.error("INTERNAL_API_KEY não está configurada no servidor.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Configuração de segurança interna ausente."
+        )
+    if not x_internal_api_key:
+        logging.warning("Header X-Internal-API-Key ausente na requisição interna.")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Chave de API interna não fornecida."
+        )
+    if x_internal_api_key != INTERNAL_API_KEY_VALUE:
+        logging.warning("Chave de API interna inválida recebida.")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Chave de API interna inválida."
+        )
+    logging.info("Chave de API interna validada com sucesso.")
+    return True
 
 async def validate_token(authorization: str = Header(...)) -> dict:
     """
@@ -286,7 +314,7 @@ async def query_documents(
             final_filters['access_level'] = 'student'
             logging.info("Applying 'access_level=student' filter for user.")
         else:
-            logging.info("Internal user/admin detected, no access level filter applied.")
+             logging.info("Internal user/admin detected, no access level filter applied.")
 
         # Remover filtros vazios, se houver (opcional, dependendo do R2R)
         final_filters = {k: v for k, v in final_filters.items() if v is not None}
@@ -317,16 +345,16 @@ async def query_documents(
             # Formatar search_results para QueryRagResponse
             formatted_search_results = []
             for res in search_results_raw:
-                # Adaptação: A resposta RAG pode ter um formato ligeiramente diferente
-                # Assumindo que `res` é um dicionário do chunk com `text` e `metadata`
-                content = res.get("text")
-                metadata = res.get("metadata", {})
+                 # Adaptação: A resposta RAG pode ter um formato ligeiramente diferente
+                 # Assumindo que `res` é um dicionário do chunk com `text` e `metadata`
+                 content = res.get("text")
+                 metadata = res.get("metadata", {})
                 doc_id = metadata.get("document_id", "unknown")
-                chunk_id = metadata.get("chunk_id", "unknown")
+                 chunk_id = metadata.get("chunk_id", "unknown")
                 score = res.get("score", 0.0)
-                
-                if content:
-                    formatted_search_results.append(
+                 
+                 if content:
+                     formatted_search_results.append(
                         SearchResultChunk(
                             document_id=str(doc_id),
                             chunk_id=str(chunk_id),
@@ -436,19 +464,20 @@ class IngestChunksResponse(BaseModel):
     "/internal/v1/ingest_chunks",
     response_model=IngestChunksResponse,
     summary="Ingere chunks pré-processados no R2R (uso interno)",
-    description="Recebe uma lista de chunks de texto e os submete para ingestão no R2R. Requer autenticação.",
+    description="Recebe uma lista de chunks de texto e os submete para ingestão no R2R. Requer autenticação via Chave de API Interna.",
     responses={
         200: {"description": "Ingestão de chunks aceita"},
-        401: {"model": ErrorResponse, "description": "Erro de Autenticação"},
+        401: {"model": ErrorResponse, "description": "Erro de Autenticação (Chave de API ausente)"},
+        403: {"model": ErrorResponse, "description": "Erro de Autenticação (Chave de API inválida)"},
         422: {"model": ErrorResponse, "description": "Erro de Validação da Requisição"},
         503: {"model": ErrorResponse, "description": "Serviço R2R indisponível"},
         500: {"model": ErrorResponse, "description": "Erro interno do servidor"}
     },
-    tags=["Internal", "Ingestion"] # Adicionar tags para organização da documentação Swagger
+    tags=["Internal", "Ingestion"]
 )
 async def ingest_chunks_endpoint(
     request_data: IngestChunksRequest,
-    token_payload: dict = Depends(validate_token) # Proteger endpoint com autenticação
+    is_internal_request_valid: bool = Depends(validate_internal_api_key) # Nova autenticação por Chave de API
 ):
     """
     Endpoint interno para ingerir chunks de texto pré-processados.
@@ -462,8 +491,7 @@ async def ingest_chunks_endpoint(
             headers={"Retry-After": "60"}
         )
 
-    user_id = token_payload.get('sub', 'unknown_service')
-    logging.info(f"[Ingest Chunks] Received request from {user_id} to ingest {len(request_data.chunks)} chunks for doc_id: {request_data.document_id}.")
+    logging.info(f"[Ingest Chunks] Received request to ingest {len(request_data.chunks)} chunks for doc_id: {request_data.document_id}. Request validated with internal API key.")
 
     # Extrair apenas o conteúdo dos chunks para o wrapper
     chunk_contents = [chunk.content for chunk in request_data.chunks]

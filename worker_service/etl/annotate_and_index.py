@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional
 import tempfile
 import json
 import traceback
+import asyncio
 
 import tiktoken
 from dotenv import load_dotenv
@@ -198,29 +199,57 @@ def _run_annotation(annotator: AnnotatorAgent, chunk: Dict[str, Any]) -> Optiona
         raise
 
 @tenacity_retry()
-def _upload_chunk_r2r(chunk: Dict[str, Any]):
-    doc_id = chunk["document_id"]
-    logger.info(f"[UPLOAD] Iniciando upload do chunk/documento {doc_id} para SciPhi/R2R...")
+async def _upload_chunk_r2r(chunk: Dict[str, Any]):
+    doc_id = chunk.get("document_id", "temp_doc_id_" + str(uuid.uuid4())) # Garantir que doc_id sempre tenha um valor
+    logger.info(f"[UPLOAD_API] Iniciando envio de chunks para API para documento {doc_id}")
+    
     if not r2r_client:
-        logger.warning("R2R client não está disponível. Pulando upload.")
-        return
+        logger.warning("R2R client (wrapper) não está disponível. Pulando envio de chunks para API.")
+        return None # Retornar None para indicar que não houve tentativa ou falha
+
     try:
-        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json") as tmp_file:
-            json.dump(chunk, tmp_file, ensure_ascii=False)
-            tmp_file_path = tmp_file.name
-        meta = _sanitize_metadata(chunk.get("metadata", {}))
-        meta["document_id"] = doc_id
-        meta.setdefault("source", chunk.get("metadata", {}).get("source_name", "unknown"))
-        response = r2r_client.upload_file(
-            file_path=tmp_file_path,
-            document_id=doc_id,
-            metadata=meta
+        # Os chunks já estão no formato List[Dict[str, Any]] com 'content'?
+        # O payload da API espera: {"document_id": ..., "chunks": [{"content": "..."}], "metadata": ...}
+        # Se 'chunk' aqui representa um *único* chunk que precisa ser enviado,
+        # precisamos envolvê-lo em uma lista para o método post_preprocessed_chunks_to_api_service.
+        
+        # Assumindo que 'chunk' representa um único pedaço de texto com seus metadados.
+        # E o `annotate_and_index.py` processa um chunk de cada vez para R2R.
+        # O novo endpoint `/internal/v1/ingest_chunks` espera uma *lista* de chunks.
+        # Portanto, vamos enviar este chunk como uma lista de um único item.
+        chunk_content_item = {"content": chunk.get("text_content", chunk.get("content", ""))} # 'text_content' ou 'content'
+        if not chunk_content_item["content"]:
+            logger.error(f"[UPLOAD_API] Chunk {doc_id} não possui campo 'text_content' ou 'content'. Pulando envio.")
+            return None
+
+        chunks_to_send = [chunk_content_item]
+        metadata_to_send = _sanitize_metadata(chunk.get("metadata", {}))
+        # Adicionar document_id aos metadados se não estiver lá, pode ser útil no R2R
+        metadata_to_send.setdefault("original_document_id", doc_id) 
+        metadata_to_send.setdefault("source", chunk.get("metadata", {}).get("source_name", "unknown"))
+
+        response_data = await r2r_client.post_preprocessed_chunks_to_api_service(
+            document_id=doc_id, # Este é o ID do documento original que gerou o chunk
+            chunks_data=chunks_to_send,
+            metadata=metadata_to_send
         )
-        logger.info(f"[UPLOAD] Upload concluído para {doc_id}. Resposta: {getattr(response, 'text', str(response))}")
-        return response
+
+        if response_data and response_data.get("success"):
+            logger.info(f"[UPLOAD_API] Envio de chunks para {doc_id} bem-sucedido. Resposta da API: {response_data.get('response')}")
+            return response_data # Retorna o dict de sucesso com a resposta da API
+        else:
+            error_msg = response_data.get("error", "Erro desconhecido ao enviar chunks para API") if response_data else "Nenhuma resposta do R2RClientWrapper"
+            logger.error(f"[UPLOAD_API] Erro ao enviar chunks para {doc_id} para API: {error_msg}")
+            # Não levantar exceção aqui para que o tenacity possa tentar novamente se for um erro de rede
+            # Se for um erro de lógica/payload, as tentativas não ajudarão, mas o log registrará.
+            return None # Indicar falha
+
     except Exception as e:
-        logger.error(f"[UPLOAD] Erro ao enviar {doc_id} para SciPhi/R2R: {e}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
-        return None
+        logger.error(f"[UPLOAD_API] Exceção inesperada ao enviar chunks para {doc_id} para API: {e}", exc_info=True)
+        # Logar o contexto do chunk para depuração
+        context_log = {k: chunk.get(k) for k in ['document_id', 'annotation_status', 'indexing_status', 'keep', 'metadata'] if k in chunk}
+        logger.error(f"Contexto do chunk no momento do erro: {json.dumps(context_log, default=str)}")
+        return None # Indicar falha
 
 def ensure_chunk_exists(chunk):
     """
@@ -316,16 +345,25 @@ def process_single_chunk(
     ):
         logger.debug(f"Chunk {doc_id}: Tentando indexação (Keep={keep_chunk}, Status atual: {current_indexing_status}).")
         try:
-            _upload_chunk_r2r(chunk)
-            logger.info(f"Chunk {doc_id}: Indexação bem-sucedida.")
-            update = {
-                "indexing_status": "done",
-                "indexed_at": datetime.now(timezone.utc).isoformat(),
-            }
-            _update_chunk_status_supabase(doc_id, update)
-            current_indexing_status = "done"
+            # MODIFICADO: Usar asyncio.run para chamar a função async
+            upload_result = asyncio.run(_upload_chunk_r2r(chunk))
+            
+            # Verificar o resultado do upload
+            if upload_result and upload_result.get("success"):
+                logger.info(f"Chunk {doc_id}: Indexação (envio para API) bem-sucedida.")
+                update = {
+                    "indexing_status": "done",
+                    "indexed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                _update_chunk_status_supabase(doc_id, update)
+                current_indexing_status = "done"
+            else:
+                logger.error(f"Chunk {doc_id}: Falha na indexação (envio para API). Resultado: {upload_result}")
+                update = {"indexing_status": "error", "indexed_at": datetime.now(timezone.utc).isoformat()}
+                _update_chunk_status_supabase(doc_id, update)
+                current_indexing_status = "error"
         except Exception as exc:
-            logger.error(f"Chunk {doc_id}: Erro FINAL durante indexação: {exc}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
+            logger.error(f"Chunk {doc_id}: Erro FINAL durante indexação (chamada asyncio.run): {exc}\nStack trace: {traceback.format_exc()}\nContexto: {json.dumps({k: chunk.get(k) for k in ['document_id','annotation_status','indexing_status','keep','metadata']}, default=str)}", exc_info=True)
             update = {"indexing_status": "error", "indexed_at": datetime.now(timezone.utc).isoformat()}
             _update_chunk_status_supabase(doc_id, update)
             current_indexing_status = "error"
@@ -423,6 +461,14 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
     logger.info(f"Falhas (exceção no worker): {len(failed_chunks)}")
     if failed_chunks:
         logger.warning(f"IDs dos chunks que falharam no processamento: {failed_chunks}")
+
+    # Fechar o cliente HTTPX se ele existir e tiver o método close_http_client
+    if r2r_client and hasattr(r2r_client, 'close_http_client') and callable(r2r_client.close_http_client):
+        try:
+            logger.info("Fechando o cliente HTTPX do R2RClientWrapper...")
+            asyncio.run(r2r_client.close_http_client()) # Executar a função async de fechamento
+        except Exception as e_close:
+            logger.error(f"Erro ao fechar o cliente HTTPX: {e_close}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------

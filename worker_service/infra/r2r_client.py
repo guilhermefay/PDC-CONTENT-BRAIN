@@ -12,6 +12,7 @@ import time # Adicionar importação de time
 import traceback # Adicionar importação de traceback
 import requests # Adicionar importação de requests
 import json # Adicionar importação de json
+import httpx # Adicionado para chamadas HTTP assíncronas
 from typing import Dict, Any, Optional, List
 from dotenv import load_dotenv
 # import r2r # Importar o pacote r2r diretamente
@@ -28,7 +29,7 @@ logger = logging.getLogger(__name__)
 # Variáveis de ambiente são carregadas dentro da classe agora
 
 # Definir exceções padrão para retry (pode ser movido para config)
-DEFAULT_RETRY_EXCEPTIONS = (Timeout, ConnectionError)
+DEFAULT_RETRY_EXCEPTIONS = (Timeout, ConnectionError, httpx.TimeoutException, httpx.ConnectError)
 
 class R2RClientWrapper:
     """
@@ -40,12 +41,15 @@ class R2RClientWrapper:
         - Retries for network operations using `RetryHandler`.
         - Standard R2R operations: health check, search, RAG, document upload/delete/list, chunk listing.
         - Agentic RAG capabilities.
+        - NEW: Posting pre-processed chunks to a custom API endpoint.
 
     Attributes:
         base_url (str): The base URL for the R2R API, loaded from R2R_BASE_URL.
-        api_key (str | None): The API key for R2R, loaded from R2R_API_KEY.
+        api_key (str | None): The API key for R2R, loaded from R2R_API_KEY (usado por métodos SDK).
+        internal_api_key (str | None): The API key for internal service-to-service communication.
         client (R2RClient): An instance of the official R2R SDK client.
         retry_handler (RetryHandler): An instance of the utility class for retrying operations.
+        http_client (httpx.AsyncClient): An instance of httpx.AsyncClient for custom API calls.
     """
     def __init__(self, retry_config: Optional[Dict[str, Any]] = None):
         """
@@ -70,10 +74,12 @@ class R2RClientWrapper:
 
         self.base_url = os.getenv("R2R_BASE_URL")
         self.api_key = os.getenv("R2R_API_KEY") # Armazenar a chave lida
+        self.internal_api_key = os.getenv("INTERNAL_API_KEY") # Nova chave para API interna
 
         # --- DEBUG: Log Environment Variables Read in __init__ ---
         logger.info(f"__init__ - R2R_BASE_URL read: {self.base_url}")
         logger.info(f"__init__ - R2R_API_KEY read: {'Present' if self.api_key else 'Not Found'}")
+        logger.info(f"__init__ - INTERNAL_API_KEY read: {'Present' if self.internal_api_key else 'Not Found'}")
         # --- END DEBUG ---
 
         if not self.base_url:
@@ -109,6 +115,15 @@ class R2RClientWrapper:
         self.retry_handler = RetryHandler(**retry_settings)
         logger.info(f"RetryHandler instantiated for R2RClientWrapper with settings: {retry_settings}")
 
+        # Inicializar o cliente HTTPX para chamadas customizadas
+        self.http_client = httpx.AsyncClient()
+        logger.info("httpx.AsyncClient initialized.")
+
+    async def close_http_client(self):
+        """Fecha o cliente httpx.AsyncClient. Deve ser chamado ao finalizar o uso da classe."""
+        if self.http_client:
+            await self.http_client.aclose()
+            logger.info("httpx.AsyncClient closed.")
 
     def health(self) -> bool:
         """
@@ -704,6 +719,69 @@ class R2RClientWrapper:
         except Exception as e:
             logger.exception(f"An unexpected error occurred during documents overview retrieval: {e}")
             return {"error": f"SDK Error: {str(e)}", "success": False, "overview": None}
+
+    # NOVO MÉTODO PARA ENVIAR CHUNKS PRÉ-PROCESSADOS
+    async def post_preprocessed_chunks_to_api_service(
+        self,
+        document_id: Optional[str],
+        chunks_data: List[Dict[str, Any]], # Espera uma lista de dicts, cada um com 'content'
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Envia chunks pré-processados para o endpoint /internal/v1/ingest_chunks do r2r-api-service.
+
+        Args:
+            document_id (Optional[str]): ID do documento original.
+            chunks_data (List[Dict[str, Any]]): Lista de chunks. Cada chunk é um dicionário
+                                               esperado com pelo menos a chave 'content'.
+            metadata (Optional[Dict[str, Any]]): Metadados a serem associados com os chunks/documento.
+
+        Returns:
+            Dict[str, Any]: A resposta JSON da API de ingestão ou um dicionário de erro.
+        """
+        if not self.internal_api_key:
+            logger.error("INTERNAL_API_KEY não configurada. Não é possível enviar chunks para a API interna.")
+            return {"success": False, "error": "INTERNAL_API_KEY não configurada no worker"}
+
+        target_url = f"{self.base_url.rstrip('/')}/internal/v1/ingest_chunks"
+        logger.info(f"Enviando {len(chunks_data)} chunks pré-processados para {target_url} para document_id: {document_id}")
+
+        payload = {
+            "document_id": document_id,
+            "chunks": chunks_data, # chunks_data já deve ser List[{"content": "..."}]
+            "metadata": metadata or {}
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Internal-API-Key": self.internal_api_key
+        }
+
+        try:
+            # Usar o retry_handler com o cliente httpx
+            async def request_operation():
+                response = await self.http_client.post(target_url, json=payload, headers=headers, timeout=60.0) # Timeout aumentado
+                response.raise_for_status() # Lança exceção para 4xx/5xx
+                return response.json()
+            
+            api_response = await self.retry_handler.execute_async(request_operation)
+            logger.info(f"Chunks enviados com sucesso para {target_url}. Resposta: {api_response}")
+            return {"success": True, "response": api_response}
+        
+        except httpx.HTTPStatusError as e:
+            error_body = "N/A"
+            try:
+                error_body = e.response.json() # Tenta ler o corpo do erro como JSON
+            except json.JSONDecodeError:
+                error_body = e.response.text # Fallback para texto puro
+            logger.error(f"Erro HTTP ao enviar chunks para {target_url}: {e.response.status_code} - {error_body}", exc_info=True)
+            return {"success": False, "error": f"Erro HTTP {e.response.status_code}: {error_body}", "status_code": e.response.status_code}
+        except httpx.RequestError as e:
+            logger.error(f"Erro de requisição ao enviar chunks para {target_url}: {e}", exc_info=True)
+            return {"success": False, "error": f"Erro de requisição: {str(e)}"}
+        except Exception as e:
+            logger.exception(f"Erro inesperado ao enviar chunks para {target_url}: {e}")
+            return {"success": False, "error": f"Erro inesperado: {str(e)}"}
 
 # Adicionar mais métodos conforme necessário (ex: update_document, get_logs, etc.)
 # Certificar-se de aplicar o retry_handler.execute() a todas as chamadas de rede.
