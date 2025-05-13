@@ -8,19 +8,19 @@ WORKDIR /app
 ENV PYTHONPATH /app
 
 # Copia o arquivo de requisitos e instala as dependências
-COPY worker_service/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copia o conteúdo de worker_service para /app
-COPY worker_service/ingestion ./ingestion
-COPY worker_service/etl ./etl
-COPY worker_service/infra ./infra
+COPY ingestion ./ingestion
+COPY etl ./etl
+COPY infra ./infra
 
-# Copia o arquivo rag_api.py da api_service para o diretório raiz
-COPY api_service/rag_api.py .
-COPY api_service/__init__.py .
+# Copia o stub do rag_api.py local
+COPY rag_api.py .
+COPY __init__.py .
 
-# agents ainda é copiado da raiz do projeto para um diretório agents em /app
+# Copia o diretório agents local
 COPY agents ./agents
 
 # Define o comando padrão para rodar a aplicação
