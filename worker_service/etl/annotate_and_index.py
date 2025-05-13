@@ -370,16 +370,6 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
             logger.error(f"Falha ao inicializar AnnotatorAgent: {e_annotator}. Anotação será pulada.", exc_info=True)
             skip_annotation = True # Força o skip se não conseguir inicializar
 
-    # Filtro para buscar chunks pendentes ou com erro em qualquer uma das etapas
-    # --- CORREÇÃO: Usar .or() em vez de .filter() com string complexa ---
-    # filter_expr = (
-    #     "or=("
-    #     "annotation_status.eq.pending,annotation_status.eq.error,"
-    #     "indexing_status.eq.pending,indexing_status.eq.error,"
-    #     "annotation_status.is.null,indexing_status.is.null" # Inclui chunks nunca processados
-    #     ")"
-    # )
-
     try:
         logger.info(f"Buscando até {batch_size} chunks pendentes ou com erro...")
         query = supabase.table("documents").select("*") # Começa a query
@@ -396,7 +386,6 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
         
         # Limita e executa
         resp = query.limit(batch_size).execute()
-        # --- FIM DA CORREÇÃO ---
         
         chunks: List[Dict[str, Any]] = resp.data or []
     except Exception as e_fetch:
@@ -405,7 +394,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
 
     if not chunks:
         logger.info("Nenhum chunk encontrado para processamento.")
-            return
+        return
 
     logger.info(f"Processando {len(chunks)} chunks encontrados...")
     processed_count = 0
@@ -422,7 +411,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
                 future.result()  # Pega o resultado (ou re-lança exceção se houve)
                 processed_count += 1
                 logger.debug(f"Chunk {doc_id} processado com sucesso pelo worker.")
-                except Exception as exc:
+            except Exception as exc:
                 logger.error(f"Erro no worker ao processar chunk {doc_id}: {exc}", exc_info=True)
                 failed_chunks.append(doc_id)
 
@@ -449,11 +438,11 @@ def main():
     args = parser.parse_args()
 
     logger.info("Executando ETL com argumentos: %s", args)
-        run_pipeline(
+    run_pipeline(
         batch_size=args.batch_size,
         max_workers=args.max_workers,
-            skip_annotation=args.skip_annotation,
-            skip_indexing=args.skip_indexing,
+        skip_annotation=args.skip_annotation,
+        skip_indexing=args.skip_indexing,
     )
     logger.info("Execução do script finalizada.")
 
