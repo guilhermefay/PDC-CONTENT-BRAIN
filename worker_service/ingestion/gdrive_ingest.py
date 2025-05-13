@@ -899,6 +899,13 @@ def ingest_gdrive_folder(
                 logger.warning("  Supabase client não configurado. Pulando save/marcação.")
                 overall_success = False 
                 
+            # <<< DEBUG: PULAR PROCESSAMENTO PESADO >>>
+            logger.info(f"[DEBUG] Pulando processamento pesado para {item_path_log} (ID: {file_id}).")
+            if supabase_client and not dry_run:
+                mark_file_db_processed(supabase_client, file_id) # Marcar como processado
+            continue # Pula para o próximo arquivo
+            # <<< FIM DEBUG >>>
+
     # 6. Marcar a Pasta como Processada (Atualizar Timestamp)
     # MODIFICAÇÃO: Lógica aprimorada para decidir quando marcar/atualizar
     should_mark_folder = overall_success and (folder_modified_since_last_check or last_processed_at is None)
