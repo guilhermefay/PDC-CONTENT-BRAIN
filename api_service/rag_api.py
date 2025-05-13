@@ -349,9 +349,9 @@ async def query_documents(
                  # Assumindo que `res` é um dicionário do chunk com `text` e `metadata`
                  content = res.get("text")
                  metadata = res.get("metadata", {})
-                doc_id = metadata.get("document_id", "unknown")
+                 doc_id = metadata.get("document_id", "unknown")
                  chunk_id = metadata.get("chunk_id", "unknown")
-                score = res.get("score", 0.0)
+                 score = res.get("score", 0.0)
                  
                  if content:
                      formatted_search_results.append(
@@ -578,4 +578,6 @@ async def health_check():
 # Ponto de entrada para desenvolvimento local
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Teste de sincronização 
