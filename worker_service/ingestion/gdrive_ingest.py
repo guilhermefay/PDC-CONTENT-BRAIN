@@ -649,7 +649,9 @@ def ingest_gdrive_folder(
     # 2. Verificar Cache Persistente (Supabase) e obter Timestamp
     last_processed_at: Optional[datetime] = None
     if supabase_client:
+        logger.info(f"[CACHE DEBUG] Verificando cache persistente para pasta ID: {folder_id}")
         last_processed_at = check_folder_processed(supabase_client, folder_id)
+        logger.info(f"[CACHE DEBUG] Resultado de check_folder_processed para {folder_id}: {last_processed_at} (Tipo: {type(last_processed_at)})")
     else:
         logger.debug(f"[{folder_path_log}] Cliente Supabase não disponível, cache persistente desabilitado.")
 
@@ -659,12 +661,22 @@ def ingest_gdrive_folder(
 
     if last_processed_at:
         # MODIFICAÇÃO: Adiciona filtro modifiedTime se a pasta já foi processada
-        timestamp_iso = last_processed_at.isoformat(timespec='milliseconds') + 'Z' 
-        gdrive_query += f" and modifiedTime > '{timestamp_iso}'"
-        query_description = f"Buscando itens modificados desde {timestamp_iso}"
-        logger.info(f"[{folder_path_log}] Pasta encontrada no cache. {query_description}.")
+        try:
+            timestamp_iso = last_processed_at.isoformat(timespec='milliseconds') + 'Z'
+            gdrive_query += f" and modifiedTime > '{timestamp_iso}'"
+            query_description = f"Buscando itens modificados desde {timestamp_iso}"
+            logger.info(f"[{folder_path_log}] Pasta encontrada no cache. {query_description}.")
+            logger.info(f"[QUERY DEBUG] Query construída (com timestamp): {gdrive_query}")
+        except AttributeError as e:
+            logger.error(f"[CACHE DEBUG] Erro ao formatar timestamp {last_processed_at} para pasta {folder_id}: {e}. Usando query completa.")
+            # Resetar query para buscar tudo em caso de erro no timestamp
+            gdrive_query = f"'{folder_id}' in parents and trashed = false"
+            query_description = "Buscando todos os itens (fallback após erro timestamp)"
+            logger.info(f"[{folder_path_log}] {query_description}.")
+            logger.info(f"[QUERY DEBUG] Query construída (fallback): {gdrive_query}")
     else:
         logger.info(f"[{folder_path_log}] Pasta não encontrada no cache persistente. {query_description}.")
+        logger.info(f"[QUERY DEBUG] Query construída (sem timestamp): {gdrive_query}")
 
     # 4. Listar Arquivos/Subpastas usando a Query
     overall_success = True
