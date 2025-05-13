@@ -5,19 +5,51 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Garante que /app esteja no PYTHONPATH
-ENV PYTHONPATH /app
+ENV PYTHONPATH=/app
 
 # Copia o arquivo de requisitos e instala as dependências
-COPY worker_service/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY worker_service/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Cria a estrutura de diretórios adequada para o worker
+RUN mkdir -p /app/ingestion /app/etl /app/infra /app/agents
 
 # Copia os diretórios necessários do worker_service para /app
-COPY worker_service/ingestion ./ingestion
-COPY worker_service/etl ./etl
-COPY worker_service/infra ./infra
-COPY worker_service/rag_api.py .
-COPY worker_service/__init__.py .
-COPY worker_service/agents ./agents
+COPY worker_service/ingestion/ /app/ingestion/
+COPY worker_service/etl/ /app/etl/
+COPY worker_service/infra/ /app/infra/
+COPY worker_service/agents/ /app/agents/
+
+# Copia os arquivos na raiz necessários para o worker
+COPY worker_service/rag_api.py /app/rag_api.py
+COPY worker_service/__init__.py /app/__init__.py
+
+# Copia o script de diagnóstico para verificar imports
+COPY check_imports.py /app/check_imports.py
+RUN chmod +x /app/check_imports.py
+
+# Copia o script de entrypoint
+COPY worker_entrypoint.sh /app/worker_entrypoint.sh
+RUN chmod +x /app/worker_entrypoint.sh
+
+# Diretórios extras para depuração - podem ser removidos se não forem necessários
+RUN mkdir -p /app/storage/ingest_output
+RUN mkdir -p /app/logs
+
+# Configurar permissões para os diretórios de saída
+RUN chmod -R 777 /app/storage /app/logs
+
+# ============================================================
+# NOTAS DE CONFIGURAÇÃO NO RAILWAY:
+# ============================================================
+# 1. Usar este Dockerfile diretamente no serviço (Dockerfile.etl)
+# 2. NÃO usar rootDirectory, apenas apontar para este Dockerfile exato
+# 3. Configurar volume para /app/storage para persistência
+# 4. Verificar imports: python check_imports.py (durante o deploy)
+# 5. Versão corrigida com parâmetros para run_annotation_pipeline
+
+# Executar verificação de imports durante o build para garantir que tudo está correto
+# RUN echo "Verificando imports do worker..." && python /app/check_imports.py
 
 # Define o comando padrão para rodar a aplicação
-CMD ["python", "-m", "ingestion.gdrive_ingest"] 
+ENTRYPOINT ["/app/worker_entrypoint.sh"]
