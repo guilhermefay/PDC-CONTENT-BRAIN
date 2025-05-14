@@ -63,3 +63,31 @@ echo "======================================"
 echo "Iniciando worker de ingestão..."
 echo "======================================"
 python -m ingestion.gdrive_ingest
+
+# Bloco de Teste Injetado
+echo "
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+print "WORKER_ENTRYPOINT.SH: INICIANDO BLOCO DE TESTE DE CONEXÃO SUPABASE"
+print "PYTHONUNBUFFERED está configurado como: [$PYTHONUNBUFFERED]"
+echo "WORKER_ENTRYPOINT.SH: INICIANDO BLOCO DE TESTE DE CONEXÃO SUPABASE"
+echo "PYTHONUNBUFFERED está configurado como: [$PYTHONUNBUFFERED]"
+echo "Executando: python /app/worker_service/etl/test_supabase_connect.py"
+
+python /app/worker_service/etl/test_supabase_connect.py
+TEST_EXIT_CODE=$?
+
+echo "TESTE DE CONEXÃO PYTHON FINALIZADO COM CÓDIGO DE SAÍDA: $TEST_EXIT_CODE"
+echo "WORKER_ENTRYPOINT.SH: Conteúdo de /app/test_run_output.txt (se existir):"
+if [ -f /app/test_run_output.txt ]; then
+    cat /app/test_run_output.txt
+else
+    echo "Arquivo /app/test_run_output.txt não encontrado pelo worker_entrypoint.sh.
+fi
+echo "WORKER_ENTRYPOINT.SH: BLOCO DE TESTE FINALIZADO. SAINDO DO SCRIPT AGORA."
+echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+"
+exit $TEST_EXIT_CODE # Sair após o teste para não continuar com o worker normal

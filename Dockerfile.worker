@@ -15,39 +15,27 @@ RUN echo ">>> BEGINNING OF /app/requirements.txt (Dockerfile.worker) <<<" && \
     echo ">>> END OF /app/requirements.txt (Dockerfile.worker) <<<"
 
 # Instalar as dependências.
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN echo ">>> BUILDING: Dockerfile.worker - requirements.txt copiado <<<" && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    echo ">>> BUILDING: Dockerfile.worker - dependências instaladas <<<"
 
-# Copiar o código fonte do worker (incluindo ingestion, etl, e infra)
-# Os caminhos COPY são relativos ao diretorio worker/
-COPY ./ingestion /app/ingestion
-COPY ./etl /app/etl
-COPY ./infra /app/infra
+# Copiar os diretórios da aplicação para dentro de /app
+COPY ./worker_service/ /app/worker_service/
+COPY ./agents/ /app/agents/
+# Adicionar outros diretórios da raiz se forem importados diretamente por scripts em /app
+# COPY ./shared/ /app/shared/ # Exemplo, se existir e for necessário
 
-# Adicione outros diretórios se o script de teste ou suas importações precisarem
+# Copiar scripts da raiz para /app
+COPY ./worker_entrypoint.sh /app/worker_entrypoint.sh
+COPY ./check_imports.py /app/check_imports.py 
 
-# Copiar o script de teste para um local esperado dentro de /app
-# Se você salvou test_supabase_connect.py em worker_service/etl/
-COPY ./worker_service/etl/test_supabase_connect.py /app/worker_service/etl/test_supabase_connect.py
+# Garantir permissões de execução
+RUN chmod +x /app/worker_entrypoint.sh && \
+    (test ! -f /app/check_imports.py || chmod +x /app/check_imports.py) # chmod +x apenas se check_imports.py existir
 
-# Copiar toda a pasta worker_service e agents (se necessário para o teste)
-# Se test_supabase_connect.py não tiver dependências em outros módulos locais,
-# apenas ele precisaria ser copiado.
-COPY ./worker_service /app/worker_service
-# COPY ./agents /app/agents # Descomente se o script de teste importar de ./agents
-
-# Copiar o script de shell para o diretório /app (ou /app/worker_service/etl/ se preferir)
-COPY ./worker_service/etl/run_and_log_test.sh /app/run_and_log_test.sh
-# Dar permissão de execução para o script shell
-RUN chmod +x /app/run_and_log_test.sh
-
-# Garantir que o diretório de trabalho para o CMD seja /app
 WORKDIR /app
 
-# CMDs e ENTRYPOINTs antigos comentados
-# CMD ["python", "./worker_service/etl/annotate_and_index.py"]
-# CMD ["/app/worker_entrypoint.sh"]
-# ENTRYPOINT ["tail", "-f", "/dev/null"] 
-
-# NOVO ENTRYPOINT MAIS EXPLÍCITO
-ENTRYPOINT ["sh", "-c", "set -e; echo '>>> EXECUTANDO ENTRYPOINT DO DOCKERFILE: /app/run_and_log_test.sh <<<'; exec /app/run_and_log_test.sh"] 
+# Deixar o Railway descobrir e executar /app/worker_entrypoint.sh (que agora contém nosso teste).
+# O "Start Command" na UI do Railway deve estar VAZIO.
+# Todos os CMD e ENTRYPOINT customizados para teste foram removidos daqui. 
