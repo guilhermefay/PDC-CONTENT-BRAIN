@@ -44,13 +44,10 @@ RUN chmod +x /app/run_and_log_test.sh
 # Garantir que o diretório de trabalho para o CMD seja /app
 WORKDIR /app
 
-# CMD original (comentado temporariamente):
+# CMDs e ENTRYPOINTs antigos comentados
 # CMD ["python", "./worker_service/etl/annotate_and_index.py"]
 # CMD ["/app/worker_entrypoint.sh"]
-
-# ENTRYPOINT comentado para permitir CMD anteriormente, agora vamos usá-lo.
 # ENTRYPOINT ["tail", "-f", "/dev/null"] 
 
-# Novo CMD para executar o wrapper script (MUDANDO PARA ENTRYPOINT)
-# CMD ["/app/run_and_log_test.sh"]
-ENTRYPOINT ["/app/run_and_log_test.sh"] 
+# NOVO ENTRYPOINT MAIS EXPLÍCITO
+ENTRYPOINT ["sh", "-c", "set -e; echo '>>> EXECUTANDO ENTRYPOINT DO DOCKERFILE: /app/run_and_log_test.sh <<<'; exec /app/run_and_log_test.sh"] 
