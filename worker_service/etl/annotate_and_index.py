@@ -23,6 +23,8 @@ Este script orquestra as seguintes etapas:
 Requer configuração via variáveis de ambiente (ver `.env.sample`).
 """
 
+from __future__ import annotations
+
 # --- INÍCIO DO MONKEY PATCH HTTP/1.1 ---
 import httpx  # Necessário para o patch
 import sys    # Para print flush
@@ -53,8 +55,6 @@ httpx.AsyncClient.__init__ = _patched_httpx_async_client_init
 
 print("!!! MONKEY PATCH HTTpx APLICADO GLOBALMENTE !!!", flush=True)
 # --- FIM DO MONKEY PATCH HTTP/1.1 ---
-
-from __future__ import annotations
 
 import argparse
 import logging
@@ -141,7 +141,6 @@ try:
             if hasattr(internal_httpx_client, 'timeout'):
                 print(f"DEBUG: Timeout of internal httpx client: {internal_httpx_client.timeout}", flush=True)
             else:
-                # ... (lógica de fallback para timeout, com flush=True) ...
                 if hasattr(supabase_client.postgrest, 'options') and hasattr(supabase_client.postgrest.options, 'timeout'):
                      print(f"DEBUG: Timeout from supabase_client.postgrest.options: {supabase_client.postgrest.options.timeout}", flush=True)
 
