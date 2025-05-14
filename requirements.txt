@@ -235,6 +235,8 @@ google-auth==2.39.0
     #   kubernetes
 google-auth-httplib2==0.2.0
     # via google-api-python-client
+google-cloud-storage==2.19.0
+    # via r2r
 googleapis-common-protos==1.70.0
     # via
     #   google-api-core
@@ -249,52 +251,53 @@ grpcio==1.71.0
     #   chromadb
     #   opentelemetry-exporter-otlp-proto-grpc
     #   qdrant-client
-h11==0.16.0
+h11==0.14.0
     # via
     #   httpcore
+    #   httpx
+    #   selenium
     #   uvicorn
-h2==4.2.0
-    # via httpx
-hpack==4.1.0
-    # via h2
-htmldate==1.8.1
+h2==4.1.0
+    # via httpcore
+hpack==4.0.0
+    # via httpcore
+html2text==2024.2.26
+    # via embedchain
+htmldate==1.10.0
     # via trafilatura
-httpcore==1.0.9
-    # via httpx
-httplib2==0.22.0
+httpcore==1.0.5
     # via
-    #   google-api-python-client
-    #   google-auth-httplib2
-httptools==0.6.4
-    # via uvicorn
-httpx[http2]==0.28.1
-    # via
-    #   assemblyai
-    #   chromadb
-    #   cohere
-    #   gotrue
-    #   langsmith
-    #   litellm
-    #   openai
+    #   httpx
     #   postgrest
-    #   qdrant-client
     #   r2r
+    #   realtime
     #   storage3
     #   supabase
-    #   supafunc
-httpx-sse==0.4.0
+httptools==0.6.1
+    # via uvicorn
+httpx==0.27.0
     # via
+    #   -r requirements.in
+    #   assemblyai
+    #   auth0-python
+    #   chromadb
     #   cohere
+    #   gptcache
+    #   instructor
+    #   kubernetes
     #   langchain-community
-huggingface-hub==0.30.2
+    #   litellm
+    #   openai
+    #   opentelemetry-exporter-otlp-proto-http
+    #   postgrest
+    #   posthog
+    #   r2r
+    #   realtime
+    #   storage3
+    #   supabase
+huggingface-hub==0.25.1
     # via
-    #   docling
-    #   docling-ibm-models
-    #   faster-whisper
     #   pyannote-audio
-    #   speechbrain
-    #   tokenizers
-    #   transformers
 humanfriendly==10.0
     # via coloredlogs
 hyperframe==6.1.0
