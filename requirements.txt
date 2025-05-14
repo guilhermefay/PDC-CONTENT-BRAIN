@@ -235,8 +235,6 @@ google-auth==2.39.0
     #   kubernetes
 google-auth-httplib2==0.2.0
     # via google-api-python-client
-google-cloud-storage==2.19.0
-    # via r2r
 googleapis-common-protos==1.70.0
     # via
     #   google-api-core
@@ -254,50 +252,52 @@ grpcio==1.71.0
 h11==0.14.0
     # via
     #   httpcore
-    #   httpx
-    #   selenium
     #   uvicorn
 h2==4.1.0
-    # via httpcore
+    # via httpx
 hpack==4.0.0
-    # via httpcore
-html2text==2024.2.26
-    # via embedchain
-htmldate==1.10.0
+    # via h2
+htmldate==1.8.1
     # via trafilatura
 httpcore==1.0.5
     # via
+    #   -r requirements.in
     #   httpx
-    #   postgrest
-    #   r2r
-    #   realtime
-    #   storage3
-    #   supabase
-httptools==0.6.1
+httplib2==0.22.0
+    # via
+    #   google-api-python-client
+    #   google-auth-httplib2
+httptools==0.6.4
     # via uvicorn
-httpx==0.27.0
+httpx[http2]==0.27.0
     # via
     #   -r requirements.in
     #   assemblyai
-    #   auth0-python
     #   chromadb
     #   cohere
-    #   gptcache
-    #   instructor
-    #   kubernetes
-    #   langchain-community
+    #   gotrue
+    #   langsmith
     #   litellm
     #   openai
-    #   opentelemetry-exporter-otlp-proto-http
     #   postgrest
-    #   posthog
+    #   qdrant-client
     #   r2r
-    #   realtime
     #   storage3
     #   supabase
+    #   supafunc
+httpx-sse==0.4.0
+    # via
+    #   cohere
+    #   langchain-community
 huggingface-hub==0.25.1
     # via
+    #   docling
+    #   docling-ibm-models
+    #   faster-whisper
     #   pyannote-audio
+    #   speechbrain
+    #   tokenizers
+    #   transformers
 humanfriendly==10.0
     # via coloredlogs
 hyperframe==6.1.0
@@ -968,6 +968,7 @@ six==1.17.0
 sniffio==1.3.1
     # via
     #   anyio
+    #   httpx
     #   openai
 sortedcontainers==2.4.0
     # via pyannote-core
@@ -1212,7 +1213,6 @@ zipp==3.21.0
     # via importlib-metadata
 zstandard==0.23.0
     # via langsmith
-gunicorn
 
 # The following packages are considered to be unsafe in a requirements file:
 # setuptools
