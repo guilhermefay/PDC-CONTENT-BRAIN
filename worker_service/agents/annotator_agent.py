@@ -150,14 +150,12 @@ class AnnotatorAgent(BaseAgent):
         logger.debug(f"[Agent Run] Iniciando processamento para: {doc_id_log}")
 
         # === Manter validação do chunk individual ===
-                if not original_chunk_dict or not original_chunk_dict.get("content"):
+        if not original_chunk_dict or not original_chunk_dict.get("content"):
             logger.warning(f"[Agent Run - {doc_id_log}] Chunk inválido ou vazio encontrado. Retornando None.")
-            return None # << RETORNAR None para chunk inválido
+            return None
 
         # === Manter preparação do input para a task ===
-        # Pegar metadados originais
         chunk_meta_orig = original_chunk_dict.get("metadata", {})
-        # Aplicar sanitização
         chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
         
         logger.debug(f"[Agent Run - {doc_id_log}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in chunk_meta_sanitized.items()}}")
@@ -175,10 +173,10 @@ class AnnotatorAgent(BaseAgent):
             "duration_sec": duration_sec
         }
         expected_temp_id = 0
-                chunk_content = original_chunk_dict["content"]
-                task_input_dict = {
-                    "temp_id": expected_temp_id,
-                    "content": chunk_content[:MAX_CHARS],
+        chunk_content = original_chunk_dict["content"]
+        task_input_dict = {
+            "temp_id": expected_temp_id,
+            "content": chunk_content[:MAX_CHARS],
             "meta": chunk_meta_final_for_task
         }
         loggable_input = task_input_dict.copy()
@@ -196,7 +194,7 @@ class AnnotatorAgent(BaseAgent):
         # --- FIM DO LOG DETALHADO ---
 
         crew_output_result = None
-                    annotation_result: Optional[ChunkOut] = None
+        annotation_result: Optional[ChunkOut] = None
 
         # === ALTERAÇÃO 3: Try/Except agora envolve a lógica do chunk individual ===
         try:
@@ -206,14 +204,14 @@ class AnnotatorAgent(BaseAgent):
             logger.debug(f"[Agent Run - {doc_id_log}] Tipo do resultado bruto: {type(crew_output_result).__name__}")
 
             logger.debug(f"[Agent Run - {doc_id_log}] Tentando extrair ChunkOut do resultado...")
-                    if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
-                        annotation_result = crew_output_result.pydantic
+            if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
+                annotation_result = crew_output_result.pydantic
                 logger.debug(f"[Agent Run - {doc_id_log}] ChunkOut extraído com sucesso: {annotation_result}")
                 
                 # Validar temp_id
-                    if annotation_result.temp_id != expected_temp_id:
+                if annotation_result.temp_id != expected_temp_id:
                     logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Retornando None.")
-                    return None # << RETORNAR None em caso de ID incorreto
+                    return None
                 
                 # Validar tags
                 invalid_tags = {tag for tag in annotation_result.tags if tag not in ALLOWED_TAGS}
@@ -225,16 +223,16 @@ class AnnotatorAgent(BaseAgent):
                 logger.info(f"[Agent Run - {doc_id_log}] Anotação bem-sucedida.")
                 return annotation_result
 
-                    else:
+            else:
                 logger.error(f"[Agent Run - {doc_id_log}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado: {crew_output_result}")
                 if crew_output_result and hasattr(crew_output_result, '__dict__'):
                     logger.debug(f"[Agent Run - {doc_id_log}] Atributos do CrewOutput: {crew_output_result.__dict__}")
-                return None # << RETORNAR None se extração falhar
+                return None
 
         # === Manter tratamento de exceções ===
-                except Exception as e:
+        except Exception as e:
             logger.exception(f"[Agent Run - {doc_id_log}] Exceção inesperada durante crew.kickoff ou processamento: {e}")
-            return None # << RETORNAR None em caso de exceção
+            return None
 
 # Exemplo de uso (para teste inicial)
 if __name__ == "__main__":
