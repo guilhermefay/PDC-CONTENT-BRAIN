@@ -4,8 +4,9 @@
 set -e # Parar em caso de erro 
 
 echo "======================================"
-echo "INICIANDO ETL WORKER ($(date))"
+echo "INICIANDO ETL WORKER (PRODUÇÃO - $(date))"
 echo "Diretório atual: $(pwd)"
+echo "PYTHONPATH: $PYTHONPATH"
 echo "======================================"
 
 # Verificar se o PYTHONPATH está configurado
@@ -21,8 +22,9 @@ echo "Verificando variáveis de ambiente críticas..."
 REQUIRED_VARS=(
   "SUPABASE_URL"
   "SUPABASE_SERVICE_KEY"
-  "GDRIVE_ROOT_FOLDER_ID"
-  "GOOGLE_APPLICATION_CREDENTIALS"
+  # Removido GDRIVE_ROOT_FOLDER_ID e GOOGLE_APPLICATION_CREDENTIALS da lista de obrigatórios por enquanto,
+  # pois o foco é o pipeline de anotação/R2R que pode não depender diretamente deles aqui.
+  # Adicionar de volta se forem realmente críticos para a inicialização do worker ANTES da lógica principal.
 )
 
 MISSING_VARS=()
@@ -37,55 +39,33 @@ if [ ${#MISSING_VARS[@]} -ne 0 ]; then
   for MVAR in "${MISSING_VARS[@]}"; do
     echo "  - $MVAR"
   done
+  # Considerar sair com erro se variáveis realmente críticas estiverem faltando para produção
+  # exit 1 
 else
-  echo "✅ Todas as variáveis de ambiente críticas estão definidas."
+  echo "✅ Todas as variáveis de ambiente críticas verificadas estão definidas."
 fi
 
-# Testar imports
+# Testar imports (opcional para produção, mas pode ser mantido para sanity check)
 echo "Executando verificação de imports..."
 python /app/check_imports.py
 IMPORT_CHECK=$?
 
 if [ $IMPORT_CHECK -ne 0 ]; then
-  echo "⚠️ AVISO: Verificação de imports falhou!"
-  # Não vamos interromper a execução, apenas alertar
-fi
-
-# Verificar conteúdo dos diretórios fundamentais
-echo "Listando diretórios fundamentais para diagnóstico..."
-ls -la /app/
-ls -la /app/agents/
-ls -la /app/ingestion/
-ls -la /app/etl/
-
-# Iniciar o serviço principal
-echo "======================================"
-echo "Iniciando worker de ingestão..."
-echo "======================================"
-python -m ingestion.gdrive_ingest
-
-# Bloco de Teste Injetado
-echo "
-
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-echo "WORKER_ENTRYPOINT.SH: INICIANDO BLOCO DE TESTE DE CONEXÃO SUPABASE"
-echo "PYTHONUNBUFFERED está configurado como: [$PYTHONUNBUFFERED]"
-echo "Executando: python /app/worker_service/etl/test_supabase_connect.py"
-
-python /app/worker_service/etl/test_supabase_connect.py
-TEST_EXIT_CODE=$?
-
-echo "TESTE DE CONEXÃO PYTHON FINALIZADO COM CÓDIGO DE SAÍDA: $TEST_EXIT_CODE"
-echo "WORKER_ENTRYPOINT.SH: Conteúdo de /app/test_run_output.txt (se existir):"
-if [ -f /app/test_run_output.txt ]; then
-    cat /app/test_run_output.txt
+  echo "CRÍTICO: Verificação de imports FALHOU! Verifique os logs acima. Saindo." 
+  exit 1 # Sair se os imports críticos falharem
 else
-    echo "Arquivo /app/test_run_output.txt não encontrado pelo worker_entrypoint.sh.
+  echo "✅ Verificação de imports concluída com sucesso."
 fi
-echo "WORKER_ENTRYPOINT.SH: BLOCO DE TESTE FINALIZADO. SAINDO DO SCRIPT AGORA."
-echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+# Verificar conteúdo dos diretórios fundamentais (opcional para produção)
+# echo "Listando diretórios fundamentais para diagnóstico..."
+# ls -la /app/
+# ls -la /app/worker_service/etl/ # Mais específico
 
-"
-exit $TEST_EXIT_CODE # Sair após o teste para não continuar com o worker normal
+# Executa o script principal do pipeline ETL.
+# O monkey-patch para HTTP/1.1 e a correção do RetryHandler estão em annotate_and_index.py
+# e resilience.py, respectivamente.
+# Usar python -u para saída não bufferizada, o que pode ajudar nos logs do Railway.
+exec python -u /app/worker_service/etl/annotate_and_index.py
+
+# O bloco de teste foi removido daqui.
