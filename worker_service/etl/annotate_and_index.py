@@ -50,6 +50,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+import httpx
 
 # Adiciona o diretório raiz do projeto ao PYTHONPATH
 # Isso garante que módulos como 'agents', 'infra', etc., sejam encontrados
@@ -117,6 +118,29 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # # --- FIM: Modificação --- 
 
 logger.info("Supabase inicializado.")
+
+# DEBUG: Verificar as opções do cliente PostgREST interno
+if hasattr(supabase, 'postgrest') and hasattr(supabase.postgrest, 'session') \
+        and hasattr(supabase.postgrest.session, '_client') \
+        and supabase.postgrest.session._client is not None:
+    internal_httpx_client = supabase.postgrest.session._client
+    logger.info(f"DEBUG: Timeout do cliente HTTPX interno do PostgREST: {internal_httpx_client.timeout}")
+    logger.info(f"DEBUG: Headers do cliente HTTPX interno do PostgREST: {internal_httpx_client.headers}")
+    # Tentar acessar _http2, que é um atributo de implementação do httpx.AsyncClient
+    if hasattr(internal_httpx_client, '_http2'):
+        logger.info(f"DEBUG: Suporte HTTP/2 do cliente HTTPX interno (via _http2): {internal_httpx_client._http2}")
+    elif hasattr(internal_httpx_client, 'http2'): # Algumas versões podem ter como propriedade pública
+        logger.info(f"DEBUG: Suporte HTTP/2 do cliente HTTPX interno (via http2): {internal_httpx_client.http2}")
+    else:
+        logger.warning("DEBUG: Atributo HTTP/2 (\'_http2\' ou \'http2\') não encontrado no cliente HTTPX interno do PostgREST.")
+elif hasattr(supabase, 'postgrest') and hasattr(supabase.postgrest, 'options') \
+        and hasattr(supabase.postgrest.options, 'timeout'):
+    # Fallback para checar as opções passadas, se o cliente interno não for acessível diretamente da mesma forma
+    logger.info(f"DEBUG: Timeout configurado nas opções do PostgREST (ClientOptions): {supabase.postgrest.options.timeout}")
+    logger.info(f"DEBUG: Headers configurados nas opções do PostgREST (ClientOptions): {supabase.postgrest.options.headers}")
+else:
+    logger.warning("DEBUG: Não foi possível acessar os detalhes do cliente HTTPX interno ou das opções do PostgREST via atributos conhecidos.")
+# ==================================================
 
 try:
     r2r_client = R2RClientWrapper()
