@@ -68,6 +68,6 @@ fi
 echo "======================================"
 echo "Iniciando script principal do ETL Worker (annotate_and_index.py)..."
 echo "======================================"
-exec python -u /app/worker_service/etl/annotate_and_index.py
+exec python -u /app/etl/annotate_and_index.py
 
 # O bloco de teste foi removido daqui.
