@@ -43,6 +43,7 @@ import tiktoken
 from dotenv import load_dotenv
 from postgrest.exceptions import APIError as PostgrestAPIError
 from supabase import Client, create_client
+from supabase.lib.client_options import ClientOptions
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -85,6 +86,17 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 if not SUPABASE_URL or not SUPABASE_KEY:
     logger.error("SUPABASE_URL ou SUPABASE_SERVICE_KEY ausentes. Abortando.")
     sys.exit(1)
+
+# Configurar timeouts e headers
+options = ClientOptions(
+    postgrest_client_timeout=300,  # Timeout de 5 minutos para operações do PostgREST
+    headers={
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+)
 
 # --- REVERTENDO: Voltar para a inicialização padrão --- 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -497,7 +509,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
 def main():
     parser = argparse.ArgumentParser(description="Pipeline ETL RAG Supabase → CrewAI → R2R")
     parser.add_argument("--batch-size", type=int, default=int(os.getenv("ETL_BATCH_SIZE", 100)), help="Número de chunks a processar por lote.")
-    parser.add_argument("--max-workers", type=int, default=int(os.getenv("ETL_MAX_WORKERS", 1)), help="Número máximo de threads paralelas.")
+    parser.add_argument("--max-workers", type=int, default=int(os.getenv("ETL_MAX_WORKERS", 2)), help="Número máximo de threads paralelas.")
     parser.add_argument("--skip-annotation", action="store_true", help="Pular etapa de anotação.")
     parser.add_argument("--skip-indexing", action="store_true", help="Pular etapa de indexação.")
     args = parser.parse_args()
