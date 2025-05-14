@@ -100,7 +100,7 @@ options = ClientOptions(
 )
 
 # --- REVERTENDO: Voltar para a inicialização padrão --- 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY, options)
 # # --- INÍCIO: Modificação para forçar Content-Type (REMOVIDA) --- 
 # # Define os cabeçalhos padrão para o cliente HTTPX
 # default_headers = {
@@ -117,30 +117,48 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 # )
 # # --- FIM: Modificação --- 
 
-logger.info("Supabase inicializado.")
+print("--- SUPABASE CLIENT INITIALIZED (using ClientOptions) ---")
 
 # DEBUG: Verificar as opções do cliente PostgREST interno
-if hasattr(supabase, 'postgrest') and hasattr(supabase.postgrest, 'session') \
-        and hasattr(supabase.postgrest.session, '_client') \
-        and supabase.postgrest.session._client is not None:
-    internal_httpx_client = supabase.postgrest.session._client
-    logger.info(f"DEBUG: Timeout do cliente HTTPX interno do PostgREST: {internal_httpx_client.timeout}")
-    logger.info(f"DEBUG: Headers do cliente HTTPX interno do PostgREST: {internal_httpx_client.headers}")
-    # Tentar acessar _http2, que é um atributo de implementação do httpx.AsyncClient
-    if hasattr(internal_httpx_client, '_http2'):
-        logger.info(f"DEBUG: Suporte HTTP/2 do cliente HTTPX interno (via _http2): {internal_httpx_client._http2}")
-    elif hasattr(internal_httpx_client, 'http2'): # Algumas versões podem ter como propriedade pública
-        logger.info(f"DEBUG: Suporte HTTP/2 do cliente HTTPX interno (via http2): {internal_httpx_client.http2}")
+print("--- BEGINNING SUPABASE CLIENT DEBUG ---")
+try:
+    # Ajustar para usar supabase_client consistentemente
+    if hasattr(supabase_client, 'postgrest') and supabase_client.postgrest:
+        print("DEBUG: supabase_client.postgrest object exists.")
+        
+        internal_session = None
+        # Tentar acessar a sessão interna do postgrest (pode ser síncrona ou assíncrona)
+        # Para supabase-py >= 2.0, postgrest é um objeto SyncPostgrestClient ou AsyncPostgrestClient
+        # e eles têm um atributo 'session' que é o cliente httpx.
+        if hasattr(supabase_client.postgrest, 'session') and supabase_client.postgrest.session:
+            internal_httpx_client = supabase_client.postgrest.session # Este é o cliente httpx
+            print(f"DEBUG: Internal httpx client type: {type(internal_httpx_client)}")
+            if hasattr(internal_httpx_client, 'timeout'):
+                print(f"DEBUG: Timeout of internal httpx client: {internal_httpx_client.timeout}")
+            else:
+                print("DEBUG: internal_httpx_client does not have direct 'timeout' attribute. Checking options used.")
+                # Se o timeout não estiver direto no cliente, pode estar nas options que o supabase_client.postgrest usa
+                if hasattr(supabase_client.postgrest, 'options') and hasattr(supabase_client.postgrest.options, 'timeout'):
+                     print(f"DEBUG: Timeout from supabase_client.postgrest.options: {supabase_client.postgrest.options.timeout}")
+
+
+            if hasattr(internal_httpx_client, 'headers'):
+                print(f"DEBUG: Headers of internal httpx client: {internal_httpx_client.headers}")
+            
+            http2_status = "UNKNOWN"
+            # Para httpx.Client (síncrono) ou httpx.AsyncClient, o controle de http2 é no construtor,
+            # não tipicamente um atributo _http2 fácil de inspecionar após a criação sem olhar os transportes.
+            # Vamos focar no timeout e headers por enquanto.
+            print(f"DEBUG: HTTP/2 support status is not directly introspectable via simple attribute here.")
+
+        else:
+            print("DEBUG: Could not access supabase_client.postgrest.session for httpx client details.")
+
     else:
-        logger.warning("DEBUG: Atributo HTTP/2 (\'_http2\' ou \'http2\') não encontrado no cliente HTTPX interno do PostgREST.")
-elif hasattr(supabase, 'postgrest') and hasattr(supabase.postgrest, 'options') \
-        and hasattr(supabase.postgrest.options, 'timeout'):
-    # Fallback para checar as opções passadas, se o cliente interno não for acessível diretamente da mesma forma
-    logger.info(f"DEBUG: Timeout configurado nas opções do PostgREST (ClientOptions): {supabase.postgrest.options.timeout}")
-    logger.info(f"DEBUG: Headers configurados nas opções do PostgREST (ClientOptions): {supabase.postgrest.options.headers}")
-else:
-    logger.warning("DEBUG: Não foi possível acessar os detalhes do cliente HTTPX interno ou das opções do PostgREST via atributos conhecidos.")
-# ==================================================
+        print("DEBUG: supabase_client.postgrest object NOT found or not initialized.")
+except Exception as e_debug:
+    print(f"DEBUG: Exception during Supabase client introspection: {str(e_debug)}")
+print("--- END OF SUPABASE CLIENT DEBUG ---")
 
 try:
     r2r_client = R2RClientWrapper()
@@ -220,7 +238,7 @@ def _update_chunk_status_supabase(doc_id: str, update: Dict[str, Any]):
 
     logger.debug(f"Atualizando Supabase para doc_id {doc_id} com payload: {payload}")
     try:
-        supabase.table("documents").update(payload).eq("document_id", doc_id).execute()
+        supabase_client.table("documents").update(payload).eq("document_id", doc_id).execute()
         logger.info(f"Status do Supabase atualizado com sucesso para doc_id {doc_id}")
     except Exception as e:
         logger.error(f"Falha ao atualizar status do Supabase para doc_id {doc_id}: {e}", exc_info=True)
@@ -313,13 +331,13 @@ def ensure_chunk_exists(chunk):
     """
     doc_id = chunk.get("document_id")
     # Busca por document_id
-    resp = supabase.table("documents").select("document_id").eq("document_id", doc_id).limit(1).execute()
+    resp = supabase_client.table("documents").select("document_id").eq("document_id", doc_id).limit(1).execute()
     if not resp.data:
         # Não existe, faz insert
         logger.info(f"[INSERT] Criando novo chunk/documento no Supabase: {doc_id}")
         # Remove campos não persistíveis se necessário
         insert_chunk = {k: v for k, v in chunk.items() if k != "chunk_index"} # chunk_index só em metadata
-        supabase.table("documents").insert(insert_chunk).execute()
+        supabase_client.table("documents").insert(insert_chunk).execute()
     else:
         logger.debug(f"[EXISTE] Chunk/documento já existe no Supabase: {doc_id}")
 
@@ -465,7 +483,7 @@ def run_pipeline(batch_size: int, max_workers: int, skip_annotation: bool, skip_
 
     try:
         logger.info(f"Buscando até {batch_size} chunks pendentes ou com erro...")
-        query = supabase.table("documents").select("*") # Começa a query
+        query = supabase_client.table("documents").select("*") # Começa a query
 
         # Aplica o filtro OR
         query = query.or_(
