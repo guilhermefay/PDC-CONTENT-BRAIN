@@ -69,8 +69,6 @@ echo "
 
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-print "WORKER_ENTRYPOINT.SH: INICIANDO BLOCO DE TESTE DE CONEXÃO SUPABASE"
-print "PYTHONUNBUFFERED está configurado como: [$PYTHONUNBUFFERED]"
 echo "WORKER_ENTRYPOINT.SH: INICIANDO BLOCO DE TESTE DE CONEXÃO SUPABASE"
 echo "PYTHONUNBUFFERED está configurado como: [$PYTHONUNBUFFERED]"
 echo "Executando: python /app/worker_service/etl/test_supabase_connect.py"
