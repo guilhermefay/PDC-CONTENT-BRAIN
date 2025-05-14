@@ -1,23 +1,23 @@
-import os, json, logging, anyio
+import os, json, logging
 from enum import Enum
 from typing import List, Dict, Any, Set, Optional
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from crewai import Agent, Task, Crew, Process
-from .base import BaseAgent
+# from .base import BaseAgent # Assuming BaseAgent will be defined in this file for standalone execution
 from crewai.crews.crew_output import CrewOutput
 
 # Configurar logging para ESTE módulo especificamente
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s') # Adjusted default level to INFO for less noise in tests
 logger = logging.getLogger(__name__)
 
-# --- INÍCIO: Copiar função _sanitize_metadata --- 
+# --- INÍCIO: Copiar função _sanitize_metadata ---
 def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
     """Converte valores não‑hasháveis (ex.: slice) em string recursivamente."""
     if not meta or not isinstance(meta, dict):
         return {} if meta is None else meta
-        
+
     clean: Dict[str, Any] = {}
     for k, v in meta.items():
         if isinstance(v, slice):
@@ -26,8 +26,8 @@ def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
             clean[k] = _sanitize_metadata(v) # Chamada recursiva para dicionários aninhados
         elif isinstance(v, list):
              # Processa listas recursivamente (caso contenham dicts ou slices)
-             clean[k] = [_sanitize_metadata(item) if isinstance(item, dict) 
-                         else str(item) if isinstance(item, slice) 
+             clean[k] = [_sanitize_metadata(item) if isinstance(item, dict)
+                         else str(item) if isinstance(item, slice)
                          else item for item in v]
         else:
             # Mantém outros tipos hasheáveis como estão
@@ -37,9 +37,16 @@ def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
             except TypeError:
                 clean[k] = str(v) # Converte para string se não for hasheável
     return clean
-# --- FIM: Copiar função _sanitize_metadata --- 
+# --- FIM: Copiar função _sanitize_metadata ---
 
-# load_dotenv(); # Pode ser redundante se já carregado pelo ETL
+# load_dotenv(); # Pode ser redundante se já carregado pelo ETL. Uncomment if needed.
+
+# Minimal BaseAgent definition if not provided elsewhere
+class BaseAgent:
+    def __init__(self, config: Optional[dict] = None):
+        self.config = config if config is not None else {}
+        # logger.info(f"{self.__class__.__name__} initialized with config: {self.config}")
+
 
 class Tag(str, Enum):
     """Enumeração das tags permitidas para classificação de conteúdo."""
@@ -74,33 +81,19 @@ class AnnotatorAgent(BaseAgent):
     Utiliza um LLM (configurado via ChatOpenAI) para executar a tarefa de classificação
     definida no prompt da Task. O resultado esperado é um objeto Pydantic `ChunkOut`.
 
-    Herda de `BaseAgent` (embora `BaseAgent` possa ser simples no momento).
+    Herda de `BaseAgent`.
     """
     def __init__(self, model:str="gpt-4o-mini", config: Optional[dict] = None):
-        """
-        Inicializa o AnnotatorAgent.
+        super().__init__(config)
+        llm = ChatOpenAI(model=model, temperature=0.1, timeout=TIMEOUT)
 
-        Configura o LLM, o Agente CrewAI subjacente, a Task com o prompt detalhado
-        e o Crew que executará a tarefa.
-
-        Args:
-            model (str): O nome do modelo LLM a ser usado (padrão: "gpt-4o-mini").
-            config (Optional[dict]): Dicionário de configuração adicional (atualmente não usado).
-        """
-        super().__init__(config) # Chama o __init__ da classe base
-        # Configurar LLM com timeout, usando o modelo passado (agora default gpt-4o-mini)
-        llm = ChatOpenAI(model=model, temperature=0.1, timeout=TIMEOUT) 
-        
-        # Definir o Agente CrewAI
         analyst = Agent(role="Analista PDC", llm=llm, verbose=False,
                         goal="Classificar um chunk de texto para o Cérebro PDC",
                         backstory="Você é um especialista em marketing digital e nos conteúdos do PDC."
                         )
-        
-        # Definir a Task com descrição detalhada e saída Pydantic esperada
+
         self.task = Task(
             agent=analyst,
-            # *** output_pydantic RESTAURADO para ChunkOut ***
             output_pydantic=ChunkOut,
             description=(
                 "[ROLE]\n"
@@ -132,128 +125,149 @@ class AnnotatorAgent(BaseAgent):
             ),
             expected_output="Um único objeto Pydantic ChunkOut. Exemplo: ChunkOut(temp_id=0, keep=True, tags=['vendas', 'lancamento'], reason='Email de campanha, referência histórica.')"
         )
-        self.crew = Crew(agents=[analyst], tasks=[self.task], process=Process.sequential, verbose=0)
+        self.crew = Crew(agents=[analyst], tasks=[self.task], process=Process.sequential, verbose=0) # verbose=0 for cleaner test output
 
     def run(self, original_chunk_dict: Dict[str, Any]) -> Optional[ChunkOut]:
         """
-        Processa UM ÚNICO chunk (dicionário), chama o CrewAI 
+        Processa UM ÚNICO chunk (dicionário), chama o CrewAI
         e retorna o resultado da anotação (ChunkOut) ou None se falhar.
 
         Args:
             original_chunk_dict (Dict[str, Any]): O dicionário do chunk a ser processado,
-                                                 contendo pelo menos 'content' e opcionalmente 'metadata'.
+                                                 contendo 'temp_id', 'content' e opcionalmente 'metadata'.
 
         Returns:
             Optional[ChunkOut]: O objeto ChunkOut com a anotação se bem-sucedido, ou None.
         """
-        doc_id_log = original_chunk_dict.get("document_id", "ID Desconhecido")
+        input_temp_id = original_chunk_dict.get("temp_id")
+        # Use temp_id for logging if available, otherwise a generic identifier
+        doc_id_log = f"temp_id: {input_temp_id}" if input_temp_id is not None else "ID Desconhecido"
         logger.debug(f"[Agent Run] Iniciando processamento para: {doc_id_log}")
 
-        # === Manter validação do chunk individual ===
-        if not original_chunk_dict or not original_chunk_dict.get("content"):
-            logger.warning(f"[Agent Run - {doc_id_log}] Chunk inválido ou vazio encontrado. Retornando None.")
+        if input_temp_id is None:
+            logger.error(f"[Agent Run - {doc_id_log}] 'temp_id' é obrigatório no chunk de entrada. Retornando None.")
             return None
 
-        # === Manter preparação do input para a task ===
+        if not original_chunk_dict or not original_chunk_dict.get("content"):
+            logger.warning(f"[Agent Run - {doc_id_log}] Chunk inválido ou com conteúdo vazio encontrado. Retornando None.")
+            return None
+
         chunk_meta_orig = original_chunk_dict.get("metadata", {})
         chunk_meta_sanitized = _sanitize_metadata(chunk_meta_orig)
-        
-        logger.debug(f"[Agent Run - {doc_id_log}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in chunk_meta_sanitized.items()}}")
-        origin = chunk_meta_sanitized.get("origin", None)
-        source_filename = chunk_meta_sanitized.get("source_filename", None)
-        chunk_index = chunk_meta_sanitized.get("chunk_index", None)
-        duration_sec = chunk_meta_sanitized.get("duration_sec", None)
-        if isinstance(chunk_index, slice):
-            logger.critical(f"[Agent Run - {doc_id_log}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização: {chunk_index}.")
 
+        logger.debug(f"[Agent Run - {doc_id_log}] Tipos nos metadados SANITIZADOS: {{k: type(v).__name__ for k, v in chunk_meta_sanitized.items()}}")
+
+        # Construct meta for the task, selecting only relevant fields
         chunk_meta_final_for_task = {
-            "origin": origin,
-            "source_filename": source_filename,
-            "chunk_index": chunk_index,
-            "duration_sec": duration_sec
+            key: chunk_meta_sanitized.get(key)
+            for key in ["origin", "source_filename", "chunk_index", "duration_sec"]
+            if chunk_meta_sanitized.get(key) is not None # Only include if present
         }
-        expected_temp_id = 0
+        # Ensure chunk_index is not a slice after sanitization if it exists
+        if isinstance(chunk_meta_final_for_task.get("chunk_index"), slice):
+             logger.critical(f"[Agent Run - {doc_id_log}] ALERTA CRÍTICO! 'chunk_index' AINDA é um objeto slice APÓS sanitização e seleção: {chunk_meta_final_for_task['chunk_index']}.")
+             # Potentially convert or handle, for now, it's a critical log. The sanitizer should have handled it.
+
         chunk_content = original_chunk_dict["content"]
         task_input_dict = {
-            "temp_id": expected_temp_id,
+            "temp_id": input_temp_id, # Use temp_id from the input chunk
             "content": chunk_content[:MAX_CHARS],
             "meta": chunk_meta_final_for_task
         }
-        loggable_input = task_input_dict.copy()
-        loggable_input["content"] = loggable_input["content"][:100] + "..."
-        logger.debug(f"[Agent Run - {doc_id_log}] Input para crew.kickoff (sanitizado): {loggable_input}")
 
-        # --- LOG DETALHADO ANTES DO KICKOFF (manter) ---
+        loggable_input = task_input_dict.copy()
+        loggable_input["content"] = (loggable_input["content"][:100] + "...") if len(loggable_input["content"]) > 100 else loggable_input["content"]
+        logger.debug(f"[Agent Run - {doc_id_log}] Input para crew.kickoff (sanitizado e truncado): {loggable_input}")
+
         try:
             meta_types_before_kickoff = {k: type(v).__name__ for k, v in task_input_dict.get("meta", {}).items()}
-            logger.info(f"[Agent Run - {doc_id_log}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
+            logger.debug(f"[Agent Run - {doc_id_log}] VERIFICANDO TIPOS EM META ANTES DO KICKOFF: {meta_types_before_kickoff}")
             if "chunk_index" in task_input_dict.get("meta", {}):
-                 logger.info(f"[Agent Run - {doc_id_log}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
+                 logger.debug(f"[Agent Run - {doc_id_log}] VALOR DE META['chunk_index'] ANTES DO KICKOFF: {task_input_dict['meta']['chunk_index']}")
         except Exception as log_exc:
              logger.error(f"[Agent Run - {doc_id_log}] Erro ao tentar logar tipos antes do kickoff: {log_exc}")
-        # --- FIM DO LOG DETALHADO ---
 
         crew_output_result = None
         annotation_result: Optional[ChunkOut] = None
 
-        # === ALTERAÇÃO 3: Try/Except agora envolve a lógica do chunk individual ===
         try:
             logger.debug(f"[Agent Run - {doc_id_log}] Chamando crew.kickoff...")
             crew_output_result = self.crew.kickoff(inputs=task_input_dict)
             logger.debug(f"[Agent Run - {doc_id_log}] Resultado bruto do crew.kickoff: {crew_output_result}")
             logger.debug(f"[Agent Run - {doc_id_log}] Tipo do resultado bruto: {type(crew_output_result).__name__}")
 
-            logger.debug(f"[Agent Run - {doc_id_log}] Tentando extrair ChunkOut do resultado...")
             if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
                 annotation_result = crew_output_result.pydantic
                 logger.debug(f"[Agent Run - {doc_id_log}] ChunkOut extraído com sucesso: {annotation_result}")
-                
-                # Validar temp_id
-                if annotation_result.temp_id != expected_temp_id:
-                    logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Retornando None.")
+
+                if annotation_result.temp_id != input_temp_id: # Validate against the input_temp_id
+                    logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {input_temp_id}, Recebido: {annotation_result.temp_id}. Retornando None.")
                     return None
-                
-                # Validar tags
+
                 invalid_tags = {tag for tag in annotation_result.tags if tag not in ALLOWED_TAGS}
                 if invalid_tags:
                     logger.warning(f"[Agent Run - {doc_id_log}] Tags inválidas encontradas: {invalid_tags}. Removendo-as.")
                     annotation_result.tags = [tag for tag in annotation_result.tags if tag in ALLOWED_TAGS]
-                
-                # === ALTERAÇÃO 4: Retornar o ChunkOut se tudo OK ===
+
                 logger.info(f"[Agent Run - {doc_id_log}] Anotação bem-sucedida.")
                 return annotation_result
-
             else:
                 logger.error(f"[Agent Run - {doc_id_log}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado: {crew_output_result}")
                 if crew_output_result and hasattr(crew_output_result, '__dict__'):
                     logger.debug(f"[Agent Run - {doc_id_log}] Atributos do CrewOutput: {crew_output_result.__dict__}")
                 return None
-
-        # === Manter tratamento de exceções ===
         except Exception as e:
             logger.exception(f"[Agent Run - {doc_id_log}] Exceção inesperada durante crew.kickoff ou processamento: {e}")
             return None
 
 # Exemplo de uso (para teste inicial)
 if __name__ == "__main__":
+    # Ensure OPENAI_API_KEY is set in your environment or .env file
+    # load_dotenv() # Uncomment if you have a .env file and haven't loaded it elsewhere
+
+    # For testing, you might want to enable DEBUG logging for this module
+    logger.setLevel(logging.DEBUG) # Set to DEBUG for detailed output during testing
+
     agent = AnnotatorAgent()
 
-    # Exemplo de trechos - agora processados um a um pela função run
     test_chunks_dicts = [
-        {"content": "Neste vídeo, vamos explorar como o marketing de conteúdo pode alavancar suas vendas.", "metadata": {"source_filename": "test1.txt", "chunk_index": 0}},
-        {"content": "Clique no link da bio para saber mais e agendar sua consultoria gratuita agora mesmo!", "metadata": {"source_filename": "test2.txt", "chunk_index": 0}},
-        {"content": "ehhh então assim tipo sabe como é ne aí a gente foi lá", "metadata": {"source_filename": "test3.txt", "chunk_index": 0}}, # Ruído
-        {"content": "Resultados comprovados: nossos clientes aumentaram o engajamento em 50% em apenas 3 meses.", "metadata": {"source_filename": "test4.txt", "chunk_index": 0}}, # Prova social
-        {"content": "Você se sente perdido sem saber o que postar? A falta de um calendário editorial te paralisa?", "metadata": {"source_filename": "test5.txt", "chunk_index": 0}}, # Dor
-        {"content": " ", "metadata": {"source_filename": "test6.txt", "chunk_index": 0}} # Inválido
+        {"temp_id": 1, "content": "Neste vídeo, vamos explorar como o marketing de conteúdo pode alavancar suas vendas.", "metadata": {"source_filename": "test1.txt", "chunk_index": 0}},
+        {"temp_id": 2, "content": "Clique no link da bio para saber mais e agendar sua consultoria gratuita agora mesmo!", "metadata": {"source_filename": "test2.txt", "chunk_index": 0}},
+        {"temp_id": 3, "content": "ehhh então assim tipo sabe como é ne aí a gente foi lá", "metadata": {"source_filename": "test3.txt", "chunk_index": 0}}, # Ruído
+        {"temp_id": 4, "content": "Resultados comprovados: nossos clientes aumentaram o engajamento em 50% em apenas 3 meses.", "metadata": {"source_filename": "test4.txt", "chunk_index": 0, "duration_sec": 15}}, # Prova social
+        {"temp_id": 5, "content": "Você se sente perdido sem saber o que postar? A falta de um calendário editorial te paralisa?", "metadata": {"source_filename": "test5.txt", "chunk_index": slice(0,100,1)}}, # Dor, with slice metadata
+        {"temp_id": 6, "content": " ", "metadata": {"source_filename": "test6.txt", "chunk_index": 0}}, # Inválido (empty content)
+        {"temp_id": 7, "content": "Instruções para amamentação correta: passo 1, passo 2.", "metadata": {"source_filename": "aula_amamentacao.mp4", "origin": "video_transcription", "chunk_index": 5}}
     ]
 
-    print("--- Iniciando Processamento (Simulado) ---")
-    annotated_results = agent.run(test_chunks_dicts)
-    print("--- Fim do Processamento ---")
+    print("--- Iniciando Processamento ---")
+    all_results = []
+    for i, chunk_dict in enumerate(test_chunks_dicts):
+        print(f"\nProcessando chunk {i+1}/{len(test_chunks_dicts)} (temp_id: {chunk_dict.get('temp_id')})...")
+        # Simulate some processing for each chunk if needed, or directly call run
+        # For example, if original_chunk_dict is expected to be a ChunkIn object:
+        # try:
+        #     chunk_input = ChunkIn(**chunk_dict)
+        #     result = agent.run(chunk_input.model_dump()) # Pass as dict
+        # except ValidationError as ve:
+        #     logger.error(f"Erro de validação Pydantic para chunk com temp_id {chunk_dict.get('temp_id')}: {ve}")
+        #     result = None
+        # else:
+        #     result = agent.run(chunk_dict) # Current setup takes dict directly
 
-    print(f"\nResultados Anotados (aprovados):")
-    for res in annotated_results:
-        print(json.dumps(res, indent=2, ensure_ascii=False))
+        result = agent.run(chunk_dict)
+        if result:
+            all_results.append(result)
+        else:
+            logger.warning(f"Chunk com temp_id {chunk_dict.get('temp_id')} não produziu resultado ou foi filtrado.")
 
-   
+    print("\n--- Fim do Processamento ---")
+
+    if all_results:
+        print(f"\nResultados Anotados ({len(all_results)}):")
+        for res in all_results:
+            # Pydantic models have a nice string representation, or convert to dict for JSON
+            print(json.dumps(res.model_dump(), indent=2, ensure_ascii=False))
+            # print(res) # Alternative direct print
+    else:
+        print("\nNenhum resultado anotado foi produzido.")
