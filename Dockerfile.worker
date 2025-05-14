@@ -48,8 +48,9 @@ WORKDIR /app
 # CMD ["python", "./worker_service/etl/annotate_and_index.py"]
 # CMD ["/app/worker_entrypoint.sh"]
 
-# ENTRYPOINT comentado para permitir CMD
+# ENTRYPOINT comentado para permitir CMD anteriormente, agora vamos usá-lo.
 # ENTRYPOINT ["tail", "-f", "/dev/null"] 
 
-# Novo CMD para executar o wrapper script
-CMD ["/app/run_and_log_test.sh"] 
+# Novo CMD para executar o wrapper script (MUDANDO PARA ENTRYPOINT)
+# CMD ["/app/run_and_log_test.sh"]
+ENTRYPOINT ["/app/run_and_log_test.sh"] 
