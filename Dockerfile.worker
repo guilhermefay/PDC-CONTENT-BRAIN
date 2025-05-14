@@ -10,9 +10,9 @@ WORKDIR /app
 COPY ./requirements.txt /app/requirements.txt
 
 # MOSTRAR O CONTEÚDO DO requirements.txt ANTES DE INSTALAR
-RUN echo ">>> BEGINNING OF /app/requirements.txt <<<" && \
+RUN echo ">>> BEGINNING OF /app/requirements.txt (Dockerfile.worker) <<<" && \
     cat /app/requirements.txt && \
-    echo ">>> END OF /app/requirements.txt <<<"
+    echo ">>> END OF /app/requirements.txt (Dockerfile.worker) <<<"
 
 # Instalar as dependências.
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -30,15 +30,26 @@ COPY ./infra /app/infra
 # Se você salvou test_supabase_connect.py em worker_service/etl/
 COPY ./worker_service/etl/test_supabase_connect.py /app/worker_service/etl/test_supabase_connect.py
 
+# Copiar toda a pasta worker_service e agents (se necessário para o teste)
+# Se test_supabase_connect.py não tiver dependências em outros módulos locais,
+# apenas ele precisaria ser copiado.
+COPY ./worker_service /app/worker_service
+# COPY ./agents /app/agents # Descomente se o script de teste importar de ./agents
+
+# Copiar o script de shell para o diretório /app (ou /app/worker_service/etl/ se preferir)
+COPY ./worker_service/etl/run_and_log_test.sh /app/run_and_log_test.sh
+# Dar permissão de execução para o script shell
+RUN chmod +x /app/run_and_log_test.sh
+
 # Garantir que o diretório de trabalho para o CMD seja /app
 WORKDIR /app
 
-# Comando para executar o script de teste
-# AJUSTE O CAMINHO PARA O SCRIPT DE TESTE SE NECESSÁRIO
-CMD ["python", "./worker_service/etl/test_supabase_connect.py"]
-
 # CMD original (comentado temporariamente):
+# CMD ["python", "./worker_service/etl/annotate_and_index.py"]
 # CMD ["/app/worker_entrypoint.sh"]
 
-# ENTRYPOINT para manter o contêiner ativo para debug
-ENTRYPOINT ["tail", "-f", "/dev/null"] 
+# ENTRYPOINT comentado para permitir CMD
+# ENTRYPOINT ["tail", "-f", "/dev/null"] 
+
+# Novo CMD para executar o wrapper script
+CMD ["/app/run_and_log_test.sh"] 
