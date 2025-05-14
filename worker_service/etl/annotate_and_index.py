@@ -90,13 +90,9 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 # Configurar timeouts e headers
 options = ClientOptions(
-    postgrest_client_timeout=300,  # Timeout de 5 minutos para operações do PostgREST
-    headers={
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
+    postgrest_client_timeout=300  # Timeout de 5 minutos para operações do PostgREST
+    # Headers de autenticação removidos daqui.
+    # create_client(SUPABASE_URL, SUPABASE_KEY) deve lidar com a service_role_key automaticamente.
 )
 
 # --- REVERTENDO: Voltar para a inicialização padrão --- 
@@ -122,40 +118,35 @@ print("--- SUPABASE CLIENT INITIALIZED (using ClientOptions) ---")
 # DEBUG: Verificar as opções do cliente PostgREST interno
 print("--- BEGINNING SUPABASE CLIENT DEBUG ---")
 try:
-    # Ajustar para usar supabase_client consistentemente
     if hasattr(supabase_client, 'postgrest') and supabase_client.postgrest:
         print("DEBUG: supabase_client.postgrest object exists.")
         
         internal_session = None
-        # Tentar acessar a sessão interna do postgrest (pode ser síncrona ou assíncrona)
-        # Para supabase-py >= 2.0, postgrest é um objeto SyncPostgrestClient ou AsyncPostgrestClient
-        # e eles têm um atributo 'session' que é o cliente httpx.
-        if hasattr(supabase_client.postgrest, 'session') and supabase_client.postgrest.session:
-            internal_httpx_client = supabase_client.postgrest.session # Este é o cliente httpx
+        if hasattr(supabase_client.postgrest, 'session') and supabase_client.postgrest.session: # Para _sync/_async
+             internal_session = supabase_client.postgrest.session
+        elif hasattr(supabase_client.postgrest, '_session') and supabase_client.postgrest._session: # Algumas libs usam _session
+             internal_session = supabase_client.postgrest._session
+        
+        if internal_session and hasattr(internal_session, '_client') and internal_session._client:
+            internal_httpx_client = internal_session._client
             print(f"DEBUG: Internal httpx client type: {type(internal_httpx_client)}")
-            if hasattr(internal_httpx_client, 'timeout'):
-                print(f"DEBUG: Timeout of internal httpx client: {internal_httpx_client.timeout}")
-            else:
-                print("DEBUG: internal_httpx_client does not have direct 'timeout' attribute. Checking options used.")
-                # Se o timeout não estiver direto no cliente, pode estar nas options que o supabase_client.postgrest usa
-                if hasattr(supabase_client.postgrest, 'options') and hasattr(supabase_client.postgrest.options, 'timeout'):
-                     print(f"DEBUG: Timeout from supabase_client.postgrest.options: {supabase_client.postgrest.options.timeout}")
-
-
-            if hasattr(internal_httpx_client, 'headers'):
-                print(f"DEBUG: Headers of internal httpx client: {internal_httpx_client.headers}")
+            print(f"DEBUG: Timeout of internal httpx client: {internal_httpx_client.timeout}")
+            print(f"DEBUG: Headers of internal httpx client: {internal_httpx_client.headers}")
             
             http2_status = "UNKNOWN"
-            # Para httpx.Client (síncrono) ou httpx.AsyncClient, o controle de http2 é no construtor,
-            # não tipicamente um atributo _http2 fácil de inspecionar após a criação sem olhar os transportes.
-            # Vamos focar no timeout e headers por enquanto.
-            print(f"DEBUG: HTTP/2 support status is not directly introspectable via simple attribute here.")
+            if hasattr(internal_httpx_client, '_http2'):
+                http2_status = internal_httpx_client._http2
+            elif hasattr(internal_httpx_client, 'http2'):
+                http2_status = internal_httpx_client.http2
+            print(f"DEBUG: HTTP/2 support of internal httpx client: {http2_status}")
 
+        elif hasattr(supabase_client.postgrest, 'options') and supabase_client.postgrest.options:
+            print(f"DEBUG: (Fallback) Timeout from postgrest.options: {getattr(supabase_client.postgrest.options, 'timeout', 'Not Set')}")
+            print(f"DEBUG: (Fallback) Headers from postgrest.options: {getattr(supabase_client.postgrest.options, 'headers', 'Not Set')}")
         else:
-            print("DEBUG: Could not access supabase_client.postgrest.session for httpx client details.")
-
+            print("DEBUG: Could not access internal httpx client details or postgrest.options directly.")
     else:
-        print("DEBUG: supabase_client.postgrest object NOT found or not initialized.")
+        print("DEBUG: supabase_client.postgrest object NOT found.")
 except Exception as e_debug:
     print(f"DEBUG: Exception during Supabase client introspection: {str(e_debug)}")
 print("--- END OF SUPABASE CLIENT DEBUG ---")
