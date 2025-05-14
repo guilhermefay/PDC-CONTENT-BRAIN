@@ -22,9 +22,8 @@ echo "Verificando variáveis de ambiente críticas..."
 REQUIRED_VARS=(
   "SUPABASE_URL"
   "SUPABASE_SERVICE_KEY"
-  # Removido GDRIVE_ROOT_FOLDER_ID e GOOGLE_APPLICATION_CREDENTIALS da lista de obrigatórios por enquanto,
-  # pois o foco é o pipeline de anotação/R2R que pode não depender diretamente deles aqui.
-  # Adicionar de volta se forem realmente críticos para a inicialização do worker ANTES da lógica principal.
+  # Adicione outras variáveis críticas para produção aqui, se necessário
+  # Ex: "R2R_BASE_URL", "INTERNAL_API_KEY" (se usadas diretamente pelo annotate_and_index)
 )
 
 MISSING_VARS=()
@@ -35,12 +34,12 @@ for VAR in "${REQUIRED_VARS[@]}"; do
 done
 
 if [ ${#MISSING_VARS[@]} -ne 0 ]; then
-  echo "⚠️ AVISO: As seguintes variáveis de ambiente não estão definidas:"
+  echo "CRÍTICO: As seguintes variáveis de ambiente OBRIGATÓRIAS não estão definidas:"
   for MVAR in "${MISSING_VARS[@]}"; do
     echo "  - $MVAR"
   done
-  # Considerar sair com erro se variáveis realmente críticas estiverem faltando para produção
-  # exit 1 
+  echo "Saindo devido a variáveis ausentes."
+  exit 1 
 else
   echo "✅ Todas as variáveis de ambiente críticas verificadas estão definidas."
 fi
@@ -66,6 +65,9 @@ fi
 # O monkey-patch para HTTP/1.1 e a correção do RetryHandler estão em annotate_and_index.py
 # e resilience.py, respectivamente.
 # Usar python -u para saída não bufferizada, o que pode ajudar nos logs do Railway.
+echo "======================================"
+echo "Iniciando script principal do ETL Worker (annotate_and_index.py)..."
+echo "======================================"
 exec python -u /app/worker_service/etl/annotate_and_index.py
 
 # O bloco de teste foi removido daqui.

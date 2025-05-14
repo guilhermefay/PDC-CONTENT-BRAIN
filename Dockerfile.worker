@@ -20,11 +20,11 @@ RUN echo ">>> BUILDING: Dockerfile.worker - requirements.txt copiado <<<" && \
     pip install --no-cache-dir -r requirements.txt && \
     echo ">>> BUILDING: Dockerfile.worker - dependências instaladas <<<"
 
-# Copiar os diretórios da aplicação para dentro de /app
+# Copiar código da aplicação
 COPY ./worker_service/ /app/worker_service/
 COPY ./agents/ /app/agents/
-# Adicionar outros diretórios da raiz se forem importados diretamente por scripts em /app
-# COPY ./shared/ /app/shared/ # Exemplo, se existir e for necessário
+# Adicionar outros diretórios da raiz do projeto que são importados
+# COPY ./shared_module /app/shared_module/ # Exemplo
 
 # Copiar scripts da raiz para /app
 COPY ./worker_entrypoint.sh /app/worker_entrypoint.sh
@@ -36,6 +36,5 @@ RUN chmod +x /app/worker_entrypoint.sh && \
 
 WORKDIR /app
 
-# Deixar o Railway descobrir e executar /app/worker_entrypoint.sh (que agora contém nosso teste).
-# O "Start Command" na UI do Railway deve estar VAZIO.
-# Todos os CMD e ENTRYPOINT customizados para teste foram removidos daqui. 
+# Comando de produção para executar o worker
+CMD ["/app/worker_entrypoint.sh"] 

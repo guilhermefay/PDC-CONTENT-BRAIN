@@ -2,6 +2,7 @@ import time
 import random
 import logging
 from typing import Callable, Any, Tuple, Type, Optional
+import asyncio
 
 # Configurar logger básico para o módulo
 logger = logging.getLogger(__name__)
@@ -129,6 +130,64 @@ class RetryHandler:
                 # Lança exceções não configuradas para retry imediatamente
                 op_name_fatal = getattr(operation, '__name__', 'unknown_operation')
                 logger.exception(f"Erro não retentável ao executar {op_name_fatal}: {e}")
+                raise
+
+    async def execute_async(self, operation: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """
+        Executa a operação assíncrona fornecida com a lógica de retry.
+
+        Tenta executar a `operation` (que deve ser um awaitable). Se uma exceção listada em 
+        `retry_exceptions` for levantada, espera um tempo calculado (backoff + jitter) 
+        usando `await asyncio.sleep()` e tenta novamente, até o número máximo de `retries`.
+
+        Args:
+            operation: A função ou método assíncrono (awaitable) a ser executado.
+            *args: Argumentos posicionais para passar para a `operation`.
+            **kwargs: Argumentos nomeados para passar para a `operation`.
+
+        Returns:
+            O resultado retornado pela `operation` se ela for bem-sucedida dentro
+            do número de tentativas permitido.
+
+        Raises:
+            A última exceção encontrada se todas as tentativas falharem.
+            TypeError: Se `operation` não for um callable.
+            Qualquer exceção não listada em `retry_exceptions` será imediatamente
+            repassada.
+        """
+        if not callable(operation):
+            # Para funções async, também é importante verificar se são coroutines, 
+            # mas `callable` é um bom primeiro passo.
+            # `inspect.iscoroutinefunction(operation)` seria mais preciso.
+            raise TypeError("'operation' deve ser um callable (função ou método assíncrono).")
+
+        attempt = 0
+        current_delay = self.initial_delay
+        while attempt <= self.retries:
+            try:
+                op_name = getattr(operation, '__name__', 'unknown_async_operation')
+                logger.debug(f"Tentativa {attempt + 1}/{self.retries + 1} para executar async {op_name}")
+                return await operation(*args, **kwargs) # Usar await para a operação assíncrona
+            except self.retry_exceptions as e:
+                attempt += 1
+                if attempt > self.retries:
+                    logger.error(f"Falha ao executar async {op_name} após {self.retries + 1} tentativas: {e}")
+                    raise
+                
+                delay = current_delay
+                if self.jitter:
+                    delay = random.uniform(0, delay)
+                
+                actual_delay = min(delay, self.max_delay)
+
+                logger.warning(f"Erro em async {op_name} (tentativa {attempt}/{self.retries + 1}): {e}. Tentando novamente em {actual_delay:.2f}s...")
+                await asyncio.sleep(actual_delay) # Usar await asyncio.sleep()
+                
+                current_delay = min(current_delay * self.backoff_factor, self.max_delay)
+                
+            except Exception as e:
+                op_name_fatal = getattr(operation, '__name__', 'unknown_async_operation')
+                logger.exception(f"Erro não retentável ao executar async {op_name_fatal}: {e}")
                 raise
 
 # Exemplo de uso (pode ser movido para testes depois)
