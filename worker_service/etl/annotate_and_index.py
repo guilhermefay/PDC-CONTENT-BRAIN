@@ -23,6 +23,37 @@ Este script orquestra as seguintes etapas:
 Requer configuração via variáveis de ambiente (ver `.env.sample`).
 """
 
+# --- INÍCIO DO MONKEY PATCH HTTP/1.1 ---
+import httpx  # Necessário para o patch
+import sys    # Para print flush
+
+print("!!! ATENÇÃO: TENTANDO APLICAR MONKEY PATCH GLOBAL NO HTTpx PARA FORÇAR HTTP/1.1 !!!", flush=True)
+
+_original_httpx_client_init = httpx.Client.__init__
+_original_httpx_async_client_init = httpx.AsyncClient.__init__
+
+def _patched_httpx_client_init(self_client, *args, **kwargs):
+    print(f"MONKEY_PATCH: httpx.Client.__init__ - Forçando http2=False. Kwargs recebidos: {kwargs}", flush=True)
+    kwargs['http2'] = False
+    _original_httpx_client_init(self_client, *args, **kwargs)
+    # Tentar logar o estado após a inicialização original
+    # http2_actual = getattr(self_client, '_http2', getattr(self_client, 'http2', 'ATRIBUTO HTTP2 NÃO ENCONTRADO'))
+    # print(f"MONKEY_PATCH: httpx.Client instanciado. Checando http2: {http2_actual}", flush=True)
+
+
+def _patched_httpx_async_client_init(self_async_client, *args, **kwargs):
+    print(f"MONKEY_PATCH: httpx.AsyncClient.__init__ - Forçando http2=False. Kwargs recebidos: {kwargs}", flush=True)
+    kwargs['http2'] = False
+    _original_httpx_async_client_init(self_async_client, *args, **kwargs)
+    # http2_actual_async = getattr(self_async_client, '_http2', getattr(self_async_client, 'http2', 'ATRIBUTO HTTP2 NÃO ENCONTRADO'))
+    # print(f"MONKEY_PATCH: httpx.AsyncClient instanciado. Checando http2: {http2_actual_async}", flush=True)
+
+httpx.Client.__init__ = _patched_httpx_client_init
+httpx.AsyncClient.__init__ = _patched_httpx_async_client_init
+
+print("!!! MONKEY PATCH HTTpx APLICADO GLOBALMENTE !!!", flush=True)
+# --- FIM DO MONKEY PATCH HTTP/1.1 ---
+
 from __future__ import annotations
 
 import argparse
@@ -50,7 +81,6 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
-import httpx
 
 # Adiciona o diretório raiz do projeto ao PYTHONPATH
 # Isso garante que módulos como 'agents', 'infra', etc., sejam encontrados
@@ -90,7 +120,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 # Configurar timeouts e headers
 options = ClientOptions(
-    postgrest_client_timeout=300,  # Timeout de 5 minutos para operações do PostgREST
+    postgrest_client_timeout=300  # Timeout de 5 minutos para operações do PostgREST
     # Headers de autenticação removidos daqui.
     # create_client(SUPABASE_URL, SUPABASE_KEY) deve lidar com a service_role_key automaticamente.
 )
