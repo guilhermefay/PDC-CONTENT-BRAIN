@@ -24,8 +24,21 @@ COPY ./ingestion /app/ingestion
 COPY ./etl /app/etl
 COPY ./infra /app/infra
 
-# Definir o comando para iniciar a aplicação do worker.
-# O WORKDIR /app garante que ingestion.gdrive_ingest seja importável.
+# Adicione outros diretórios se o script de teste ou suas importações precisarem
+
+# Copiar o script de teste para um local esperado dentro de /app
+# Se você salvou test_supabase_connect.py em worker_service/etl/
+COPY ./worker_service/etl/test_supabase_connect.py /app/worker_service/etl/test_supabase_connect.py
+
+# Garantir que o diretório de trabalho para o CMD seja /app
+WORKDIR /app
+
+# Comando para executar o script de teste
+# AJUSTE O CAMINHO PARA O SCRIPT DE TESTE SE NECESSÁRIO
+CMD ["python", "./worker_service/etl/test_supabase_connect.py"]
+
+# CMD original (comentado temporariamente):
+# CMD ["/app/worker_entrypoint.sh"]
 
 # ENTRYPOINT para manter o contêiner ativo para debug
 ENTRYPOINT ["tail", "-f", "/dev/null"] 
