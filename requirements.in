@@ -1,31 +1,34 @@
-# requirements.in
-pytest-mock
-crewai
-crewai[tools]
-langchain
-langchain-community
-langchain-openai
+# requirements.in - Worker Essentials
 supabase
 assemblyai
 whisperx
-fastapi>=0.100.0
-uvicorn
+fastapi>=0.100.0 
+uvicorn 
 tiktoken
 python-jose[cryptography]
 python-dotenv
 python-multipart
 PyJWT==2.8.0
-docling
-pytest>=8.3.3
-r2r==3.5.18 # Mantendo a versão necessária para R2RClient
+r2r==3.5.18 
 requests
 google-api-python-client
+
+# Trying older, potentially more stable versions
 httpx==0.27.0
 httpcore==1.0.5
 
-# Dev dependencies (from requirements-dev.txt)
-pytest-cov
-flake8
-tenacity
-tqdm==4.66.4
-trafilatura==1.9.0 
+# Temporarily removing for simplification:
+# pytest-mock
+# crewai
+# crewai[tools]
+# langchain
+# langchain-community
+# langchain-openai
+# docling
+# pytest>=8.3.3
+# # Dev dependencies (from requirements-dev.txt)
+# pytest-cov
+# flake8 
+# tenacity
+# tqdm==4.66.4
+# trafilatura==1.9.0 
