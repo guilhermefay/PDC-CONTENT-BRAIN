@@ -11,7 +11,7 @@ from crewai.crews.crew_output import CrewOutput
 # Configurar logging para ESTE módulo especificamente
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
 logger = logging.getLogger(__name__)
-logger.info("--- ANNOTATOR_AGENT.PY - SCRIPT VERSION: 2024-05-16 11:30 AM ---") # Adicionando log de versão
+logger.info("--- ANNOTATOR_AGENT.PY - SCRIPT VERSION: 2024-05-16 11:55 AM - FORCED REFRESH CHECK ---") # Log de versão ATUALIZADO
 
 # --- INÍCIO: Copiar função _sanitize_metadata --- 
 def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -223,16 +223,15 @@ class AnnotatorAgent(BaseAgent):
                 logger.debug(f"[Agent Run - {doc_id_log}] Forçando temp_id para {expected_temp_id}. Valor original do LLM/CrewAI: {annotation_result.temp_id if annotation_result else 'N/A'}")
                 if annotation_result:
                     annotation_result.temp_id = expected_temp_id
+                else: 
+                    logger.error(f"[Agent Run - {doc_id_log}] ALERTA: annotation_result é None ANTES de forçar temp_id. Isso não deveria acontecer aqui se o if externo foi satisfeito.")
                 
-                # A validação original de temp_id não é mais estritamente necessária,
-                # mas pode ser mantida como um log de aviso se o LLM não estiver seguindo as instruções.
-                # Comentando por enquanto para evitar a interrupção do fluxo.
-                # if annotation_result.temp_id != expected_temp_id: # Esta condição será sempre falsa agora
-                #     logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Resultado bruto: {crew_output_result.raw}. Retornando None.")
-                #     return None # << RETORNAR None em caso de ID incorreto
+                # O bloco de verificação de discrepância de temp_id foi completamente REMOVIDO daqui.
+                # Se o erro de 'Discrepância de temp_id!' ainda aparecer nos logs,
+                # é uma forte indicação de que uma versão antiga do arquivo está em execução no Railway.
                 
                 # Validar tags
-                if annotation_result and hasattr(annotation_result, 'tags') and isinstance(annotation_result.tags, list): # Adicionada verificação de segurança
+                if annotation_result and hasattr(annotation_result, 'tags') and isinstance(annotation_result.tags, list):
                     invalid_tags = {tag for tag in annotation_result.tags if tag not in ALLOWED_TAGS}
                     if invalid_tags:
                         logger.warning(f"[Agent Run - {doc_id_log}] Tags inválidas encontradas: {invalid_tags}. Removendo-as.")
