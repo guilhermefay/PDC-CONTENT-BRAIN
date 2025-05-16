@@ -9,6 +9,10 @@ echo "Diretório atual: $(pwd)"
 echo "PYTHONPATH: $PYTHONPATH"
 echo "======================================"
 
+echo "Limpando __pycache__ antigos em /app..."
+find /app -type d -name "__pycache__" -print -exec rm -rf {} +
+echo "Limpeza de __pycache__ concluída."
+
 # Verificar se o PYTHONPATH está configurado
 if [ -z "$PYTHONPATH" ]; then
   echo "⚠️ PYTHONPATH não definido. Configurando para /app..."
