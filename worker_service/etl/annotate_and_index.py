@@ -404,7 +404,7 @@ async def _upload_document_batch_to_r2r(
         # Vamos passar document_id_from_source como o `document_id_original` para o R2RClientWrapper.
         logger.info(f"Enviando {len(r2r_document_chunks_to_send)} DocumentChunks para R2R. Documento R2R PAI (source_id nos chunks): '{document_id_from_source}'.")
         
-        r2r_response = await r2r_client.post_preprocessed_chunks(
+        r2r_response = await r2r_client.async_post_preprocessed_chunks(
             document_id_original=document_id_from_source, # Este é o ID do Documento R2R "pai"
             document_chunks=r2r_document_chunks_to_send
         )
@@ -667,7 +667,7 @@ async def run_pipeline(
                     list_of_supabase_chunk_dicts=chunks_for_this_r2r_doc,
                     supabase_chunk_ids_in_batch=supabase_ids_for_this_r2r_doc
                 )
-                total_chunks_submitted_to_r2r_in_run += num_chunks_for_this_r2r_doc # Contar os que foram para a função de upload
+                total_chunks_submitted_to_r2r_in_run += num_chunks_for_this_parent # Contar os que foram para a função de upload
         elif args.skip_r2r_indexing:
             logger.info(f"Lote {total_batches_processed}: Indexação R2R pulada por flag.")
         else:
