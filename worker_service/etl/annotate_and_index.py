@@ -541,18 +541,21 @@ async def run_pipeline(
     gdrive_service: Any, 
     args: argparse.Namespace
 ):
-    logger.info("Iniciando o pipeline de processamento de chunks...")
+    logger.info(f"Executando ETL com argumentos: {args}")
+    
     annotator_service = None
     if not args.skip_annotation:
         try:
-            annotator_service = AnnotatorAgent(use_cache=not args.no_cache_crewai) 
-            logger.info(f"Serviço AnnotatorAgent inicializado (cache {'DESABILITADO' if args.no_cache_crewai else 'HABILITADO'}).")
-        except Exception as e:
-            logger.error(f"Falha ao inicializar AnnotatorAgent: {e}", exc_info=True)
+            annotator_service = AnnotatorAgent() 
+            logger.info("AnnotatorAgent instanciado com sucesso.")
+        except Exception as e_annotator:
+            logger.error(f"Falha ao inicializar AnnotatorAgent: {e_annotator}", exc_info=True)
             logger.error("A anotação será ignorada.")
-    
-    if annotator_service: logger.info("AnnotatorAgent FOI instanciado.")
-    else: logger.warning("AnnotatorAgent NÃO foi instanciado. Anotação será pulada.")
+    else:
+        logger.info("Anotação pulada conforme argumento --skip_annotation.")
+
+    if annotator_service is None and not args.skip_annotation:
+        logger.warning("AnnotatorAgent NÃO foi instanciado. Anotação será pulada.")
 
     source_id_to_r2r_doc_id_map: Dict[str, str] = {} # Mapeia ID da fonte original para ID do Documento R2R "pai"
 
@@ -699,23 +702,27 @@ async def fetch_pending_chunks_from_supabase(
         # Não filtra por status "reprocessed_skipped_all" aqui, pois o reprocessamento pode querer pegar tudo.
         # A lógica de pular ou não o reprocessamento fica em process_single_chunk.
     else:
-        conditions = [
-            "status.eq.pending_annotation",
-            "status.eq.pending_indexing", # Pode ser um estado intermediário onde a anotação está ok, mas R2R pendente
-            "annotation_status.is.null",
-            "annotation_status.eq.pending",
-            "annotation_status.eq.annotation_failed", # Unificado
-            "r2r_status.is.null",
-            "r2r_status.eq.pending", # Nunca foi para R2R ou está pendente
-            "r2r_status.startswith.failed", # Qualquer falha no R2R
-        ]
+        # Construindo a query OR
+        # Condições para buscar chunks que precisam de atenção (anotação ou indexação)
+        # ou que falharam em etapas anteriores.
+        filters = (
+            "status.eq.pending_annotation," # Novo, precisa de anotação
+            "status.eq.pending_indexing," # Anotado e 'keep', precisa de indexação R2R
+            "annotation_status.is.null," # Nunca tentou anotar
+            "annotation_status.eq.pending," # Em processo de anotação (improvável, mas para segurança)
+            "annotation_status.eq.annotation_failed," # Falha na anotação
+            "r2r_status.is.null," # Nunca tentou indexar no R2R (e deveria, i.e. keep=True)
+            "r2r_status.eq.pending," # Em processo de indexação R2R (improvável)
+            # CORREÇÃO: Alterar startswith para like com wildcard %
+            "r2r_status.like.failed%" # Falha na indexação R2R 
+        )
+        
         if reprocess_supabase_annotations:
-            logger.info("REPROCESS_SUPABASE_ANNOTATIONS=True. Incluindo chunks com annotation_status 'done' ou 'skipped' para re-anotação.")
-            conditions.extend([
-                "annotation_status.eq.done",   # Já anotado, mas forçando re-anotação
-                "annotation_status.eq.skipped" # Pulado, mas forçando re-anotação
-            ])
-        query = query.or_(",".join(conditions))
+            logger.warning(f"REPROCESS_SUPABASE_ANNOTATIONS ativado. Buscando chunks com annotation_status != 'done' e keep != False, ignorando status de R2R.")
+            # Adicionando condições para re-anotação
+            filters += ("annotation_status.ne.done", "keep.ne.False")
+        
+        query = query.or_(",".join(filters))
 
     query = query.order("updated_at", desc=False).limit(limit) # Processar os mais antigos primeiro
 
