@@ -465,6 +465,7 @@ def process_single_chunk(
                 annotation_input_dict = {
                     "text_content": current_chunk_content,
                     "id": chunk_supabase_id, # Passa o supabase_id para o anotador
+                    "temp_id": chunk_supabase_id, # Adicionado explicitamente temp_id para o AnnotatorAgent
                     "metadata": chunk_initial_data.get("metadata", {})
                 }
                 annotation_result = _run_annotation(annotator, annotation_input_dict)
