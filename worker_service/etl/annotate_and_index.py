@@ -86,7 +86,11 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+logger_etl_version_check = logging.getLogger("etl_version_check")
+logger_etl_version_check.info("--- ETL_ANNOTATE_AND_INDEX.PY --- VERSION_MAY_16_REFRESH_CHECK_V3 --- ATTEMPTING IMPORT AnnotatorAgent ---")
 from agents.annotator_agent import AnnotatorAgent, ChunkOut
+logger_etl_version_check.info("--- ETL_ANNOTATE_AND_INDEX.PY --- VERSION_MAY_16_REFRESH_CHECK_V3 --- IMPORTED AnnotatorAgent SUCCESSFULLY ---")
+
 from infra.r2r_client import R2RClientWrapper
 
 # ---------------------------------------------------------------------------
