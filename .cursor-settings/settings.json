@@ -1,15 +1,1 @@
-{
-  "remoteExecution": {
-    "servers": [
-      {
-        "name": "taskmaster-ai",
-        "command": ["DEBUG=true", "node", "./node_modules/.bin/task-master-ai"],
-        "environment": {
-            "ANTHROPIC_API_KEY": "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"
-        },
-        "workingDirectory": ".",
-        "debounceMs": 1000
-      }
-    ]
-  }
-} 
+{} 

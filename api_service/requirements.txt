@@ -1,0 +1,12 @@
+fastapi
+pydantic
+python-dotenv
+supabase
+pyjwt
+gunicorn
+uvicorn
+httptools
+uvloop
+websockets
+requests
+r2r

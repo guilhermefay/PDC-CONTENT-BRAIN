@@ -1,0 +1,40 @@
+# Use a imagem oficial do Python como base
+FROM python:3.11-slim
+
+# Definir o diretório de trabalho dentro do contêiner
+WORKDIR /app
+
+# Copiar os arquivos de dependência
+# Usando api/requirements.txt por enquanto, pois um requirements dedicado para o worker não foi encontrado.
+# O caminho COPY é relativo à raiz do contexto de build (que será worker/)
+COPY ./requirements.txt /app/requirements.txt
+
+# MOSTRAR O CONTEÚDO DO requirements.txt ANTES DE INSTALAR
+RUN echo ">>> BEGINNING OF /app/requirements.txt (Dockerfile.worker) <<<" && \
+    cat /app/requirements.txt && \
+    echo ">>> END OF /app/requirements.txt (Dockerfile.worker) <<<"
+
+# Instalar as dependências.
+RUN echo ">>> BUILDING: Dockerfile.worker - requirements.txt copiado <<<" && \
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    echo ">>> BUILDING: Dockerfile.worker - dependências instaladas <<<"
+
+# Copiar código da aplicação
+COPY ./worker_service/ /app/worker_service/
+COPY ./agents/ /app/agents/
+# Adicionar outros diretórios da raiz do projeto que são importados
+# COPY ./shared_module /app/shared_module/ # Exemplo
+
+# Copiar scripts da raiz para /app
+COPY ./worker_entrypoint.sh /app/worker_entrypoint.sh
+COPY ./check_imports.py /app/check_imports.py 
+
+# Garantir permissões de execução
+RUN chmod +x /app/worker_entrypoint.sh && \
+    (test ! -f /app/check_imports.py || chmod +x /app/check_imports.py) # chmod +x apenas se check_imports.py existir
+
+WORKDIR /app
+
+# Comando de produção para executar o worker
+CMD ["/app/worker_entrypoint.sh"] 

@@ -1,0 +1,52 @@
+{
+    "video_id": "5BrRV8J4O1s",
+    "video_url": "https://www.youtube.com/watch?v=5BrRV8J4O1s",
+    "video_title": "COMO VALORIZAR A SUA HORA NA PEDIATRIA!",
+    "channel_url": "https://www.youtube.com/@pediatradeconsultorio/videos",
+    "source_type": "youtube_video_transcription",
+    "transcribed_at": "2025-05-09T00:31:45.683686+00:00",
+    "assemblyai_transcript_id": "mock_assembly_id_5BrRV8J4O1s",
+    "transcription_details": {
+        "text": "Esta é uma transcrição mockada para o vídeo 5BrRV8J4O1s.",
+        "words": [
+            {
+                "text": "Esta",
+                "start": 0,
+                "end": 100,
+                "confidence": 0.9
+            },
+            {
+                "text": "é",
+                "start": 110,
+                "end": 150,
+                "confidence": 0.9
+            },
+            {
+                "text": "uma",
+                "start": 160,
+                "end": 250,
+                "confidence": 0.9
+            },
+            {
+                "text": "transcrição",
+                "start": 260,
+                "end": 800,
+                "confidence": 0.9
+            },
+            {
+                "text": "mockada.",
+                "start": 810,
+                "end": 1200,
+                "confidence": 0.9
+            }
+        ],
+        "utterances": [
+            {
+                "speaker": "A",
+                "text": "Esta é uma transcrição mockada para o vídeo 5BrRV8J4O1s.",
+                "start": 0,
+                "end": 1200
+            }
+        ]
+    }
+}

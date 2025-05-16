@@ -1,0 +1,18 @@
+[database]
+user = "postgres-user"
+password = "postgres-password"
+host = "r2r-postgres-db.railway.internal"
+port = 5432
+db_name = "postgres-db"
+
+[app]
+project_name = "PDC-CONTENT-BRAIN"
+
+[completion]
+provider = "r2r"
+quality_llm = "openai/gpt-4.1"
+fast_llm = "openai/gpt-4.1-mini"
+vlm = "openai/gpt-4.1"
+audio_lm = "openai/whisper-1"
+reasoning_llm = "openai/o3-mini"
+planning_llm = "anthropic/claude-3-7-sonnet-20250219"

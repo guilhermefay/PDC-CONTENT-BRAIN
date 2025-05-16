@@ -1,0 +1,9 @@
+fastapi
+pydantic
+python-dotenv
+supabase
+pyjwt
+gunicorn
+uvicorn[standard]
+requests
+r2r
