@@ -184,6 +184,8 @@ class AnnotatorAgent(BaseAgent):
         else:
             expected_temp_id = supabase_chunk_id
 
+        logger.info(f"[Agent Run - {doc_id_log}] VALOR INICIAL DE expected_temp_id: {expected_temp_id}, TIPO: {type(expected_temp_id).__name__}") # LOG ADICIONADO
+
         chunk_content = original_chunk_dict["content"]
         task_input_dict = {
             "temp_id": expected_temp_id, # Usar o ID do Supabase
@@ -218,17 +220,15 @@ class AnnotatorAgent(BaseAgent):
             if crew_output_result and isinstance(crew_output_result, CrewOutput) and hasattr(crew_output_result, 'pydantic') and isinstance(crew_output_result.pydantic, ChunkOut):
                 annotation_result = crew_output_result.pydantic
                 logger.debug(f"[Agent Run - {doc_id_log}] ChunkOut extraído com sucesso: {annotation_result}")
+                logger.info(f"[Agent Run - {doc_id_log}] VALOR DE annotation_result.temp_id IMEDIATAMENTE APÓS EXTRAÇÃO: {annotation_result.temp_id if annotation_result else 'N/A'}, TIPO: {type(annotation_result.temp_id).__name__ if annotation_result else 'N/A'}") # LOG ADICIONADO
                 
                 # CORREÇÃO: Forçar o temp_id correto, independentemente do que o LLM/CrewAI retornou.
                 logger.debug(f"[Agent Run - {doc_id_log}] Forçando temp_id para {expected_temp_id}. Valor original do LLM/CrewAI: {annotation_result.temp_id if annotation_result else 'N/A'}")
                 if annotation_result:
                     annotation_result.temp_id = expected_temp_id
+                    logger.info(f"[Agent Run - {doc_id_log}] VALOR DE annotation_result.temp_id APÓS FORÇAR: {annotation_result.temp_id}, TIPO: {type(annotation_result.temp_id).__name__}") # LOG ADICIONADO
                 else: 
                     logger.error(f"[Agent Run - {doc_id_log}] ALERTA: annotation_result é None ANTES de forçar temp_id. Isso não deveria acontecer aqui se o if externo foi satisfeito.")
-                
-                # O bloco de verificação de discrepância de temp_id foi completamente REMOVIDO daqui.
-                # Se o erro de 'Discrepância de temp_id!' ainda aparecer nos logs,
-                # é uma forte indicação de que uma versão antiga do arquivo está em execução no Railway.
                 
                 # Validar tags
                 if annotation_result and hasattr(annotation_result, 'tags') and isinstance(annotation_result.tags, list):
