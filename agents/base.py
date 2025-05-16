@@ -1,3 +1,7 @@
+import logging
+logger = logging.getLogger(__name__)
+logger.info("--- AGENTS/BASE.PY --- CACHE_BUST_V5_BASE --- LOADING ---")
+
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
