@@ -705,16 +705,16 @@ async def fetch_pending_chunks_from_supabase(
         # Construindo a query OR
         # Condições para buscar chunks que precisam de atenção (anotação ou indexação)
         # ou que falharam em etapas anteriores.
+        # CORREÇÃO: Remover vírgulas do final de cada string de filtro individual.
         filters = (
-            "status.eq.pending_annotation," # Novo, precisa de anotação
-            "status.eq.pending_indexing," # Anotado e 'keep', precisa de indexação R2R
-            "annotation_status.is.null," # Nunca tentou anotar
-            "annotation_status.eq.pending," # Em processo de anotação (improvável, mas para segurança)
-            "annotation_status.eq.annotation_failed," # Falha na anotação
-            "r2r_status.is.null," # Nunca tentou indexar no R2R (e deveria, i.e. keep=True)
-            "r2r_status.eq.pending," # Em processo de indexação R2R (improvável)
-            # CORREÇÃO: Alterar startswith para like com wildcard %
-            "r2r_status.like.failed%" # Falha na indexação R2R 
+            "status.eq.pending_annotation", 
+            "status.eq.pending_indexing",
+            "annotation_status.is.null", 
+            "annotation_status.eq.pending", 
+            "annotation_status.eq.annotation_failed", 
+            "r2r_status.is.null", 
+            "r2r_status.eq.pending", 
+            "r2r_status.like.failed%" 
         )
         
         if reprocess_supabase_annotations:
@@ -722,7 +722,7 @@ async def fetch_pending_chunks_from_supabase(
             # Adicionando condições para re-anotação
             filters += ("annotation_status.ne.done", "keep.ne.False")
         
-        query = query.or_(",".join(filters))
+        query = query.or_(",".join(filters)) # A junção com vírgula aqui é a forma correta de passar para o .or_()
 
     query = query.order("updated_at", desc=False).limit(limit) # Processar os mais antigos primeiro
 
