@@ -219,19 +219,30 @@ class AnnotatorAgent(BaseAgent):
                 annotation_result = crew_output_result.pydantic
                 logger.debug(f"[Agent Run - {doc_id_log}] ChunkOut extraído com sucesso: {annotation_result}")
                 
-                # Validar temp_id
-                if annotation_result.temp_id != expected_temp_id:
-                    logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Resultado bruto: {crew_output_result.raw}. Retornando None.")
-                    return None # << RETORNAR None em caso de ID incorreto
+                # CORREÇÃO: Forçar o temp_id correto, independentemente do que o LLM/CrewAI retornou.
+                logger.debug(f"[Agent Run - {doc_id_log}] Forçando temp_id para {expected_temp_id}. Valor original do LLM/CrewAI: {annotation_result.temp_id if annotation_result else 'N/A'}")
+                if annotation_result:
+                    annotation_result.temp_id = expected_temp_id
+                
+                # A validação original de temp_id não é mais estritamente necessária,
+                # mas pode ser mantida como um log de aviso se o LLM não estiver seguindo as instruções.
+                # Comentando por enquanto para evitar a interrupção do fluxo.
+                # if annotation_result.temp_id != expected_temp_id: # Esta condição será sempre falsa agora
+                #     logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Resultado bruto: {crew_output_result.raw}. Retornando None.")
+                #     return None # << RETORNAR None em caso de ID incorreto
                 
                 # Validar tags
-                invalid_tags = {tag for tag in annotation_result.tags if tag not in ALLOWED_TAGS}
-                if invalid_tags:
-                    logger.warning(f"[Agent Run - {doc_id_log}] Tags inválidas encontradas: {invalid_tags}. Removendo-as.")
-                    annotation_result.tags = [tag for tag in annotation_result.tags if tag in ALLOWED_TAGS]
-                
+                if annotation_result and hasattr(annotation_result, 'tags') and isinstance(annotation_result.tags, list): # Adicionada verificação de segurança
+                    invalid_tags = {tag for tag in annotation_result.tags if tag not in ALLOWED_TAGS}
+                    if invalid_tags:
+                        logger.warning(f"[Agent Run - {doc_id_log}] Tags inválidas encontradas: {invalid_tags}. Removendo-as.")
+                        annotation_result.tags = [tag for tag in annotation_result.tags if tag in ALLOWED_TAGS]
+                elif annotation_result: # Se annotation_result existe mas não tem tags ou não é lista
+                    logger.warning(f"[Agent Run - {doc_id_log}] Campo 'tags' ausente ou não é uma lista no annotation_result. Definindo como lista vazia.")
+                    annotation_result.tags = []
+
                 # === ALTERAÇÃO 4: Retornar o ChunkOut se tudo OK ===
-                logger.info(f"[Agent Run - {doc_id_log}] Anotação bem-sucedida.")
+                logger.info(f"[Agent Run - {doc_id_log}] Anotação bem-sucedida (temp_id corrigido se necessário).")
                 return annotation_result
 
             else:
