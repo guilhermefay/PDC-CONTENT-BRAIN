@@ -358,18 +358,35 @@ async def _upload_document_batch_to_r2r(
         # Adicionar o document_id_from_source (ex: GDrive ID) também aos metadados do chunk R2R para rastreabilidade
         r2r_chunk_metadata["document_id_source_system"] = document_id_from_source
 
-        # O `document_id_original` para post_preprocessed_chunks é o ID do DOCUMENTO "PAI" no R2R.
-        # Todos os DocumentChunk nesta lista terão este mesmo `document_id_original` como seu `source_id`.
-        # Este ID do documento "pai" R2R pode ser o mesmo que `document_id_from_source` se quisermos mapeamento 1:1,
-        # ou um novo UUID se `document_id_from_source` não for um UUID válido para R2R.
         # A função `post_preprocessed_chunks` do R2RClientWrapper espera `document_id_original` como o ID do doc pai no R2R.
         
+        # CORREÇÃO: Ajustar a criação do DocumentChunk para corresponder aos campos esperados pelo R2R.
+        # Valores mockados para collection_ids e owner_id por enquanto.
+        mock_collection_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+        mock_owner_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+        # Tentar converter document_id_from_source para UUID. 
+        # Se falhar, pode indicar um problema fundamental na forma como estamos identificando documentos R2R.
+        try:
+            r2r_parent_document_uuid = uuid.UUID(document_id_from_source)
+        except ValueError:
+            logger.error(f"Falha ao converter document_id_from_source ('{document_id_from_source}') para UUID. Isso será um problema para o R2R.")
+            # O que fazer aqui? Por agora, vamos deixar a exceção original do Pydantic ocorrer se a conversão falhar, 
+            # ou podemos pular este lote e marcar como erro.
+            # Optando por deixar seguir e ver o erro do Pydantic se ocorrer, para diagnóstico.
+            # No entanto, uma abordagem mais robusta seria ter um mapeamento ou geração de UUIDs válidos para R2R.
+            r2r_parent_document_uuid = document_id_from_source # Pode causar erro no DocumentChunk se não for UUID
+
         r2r_document_chunks_to_send.append(
             DocumentChunk(
-                chunk_id=str(uuid.uuid4()), # Novo UUID para este R2R DocumentChunk
-                text=chunk_text,
-                metadata=r2r_chunk_metadata,
-                source_id=document_id_from_source # ID do documento PAI no R2R ao qual este chunk pertence.
+                id=uuid.uuid4(),  # Campo 'id' do R2R DocumentChunk
+                document_id=r2r_parent_document_uuid, # Campo 'document_id' do R2R DocumentChunk (ID do doc pai)
+                collection_ids=[mock_collection_id], # Campo 'collection_ids' obrigatório
+                owner_id=mock_owner_id, # Campo 'owner_id' obrigatório
+                data=chunk_text,  # Campo 'data' do R2R DocumentChunk (anteriormente 'text')
+                metadata=r2r_chunk_metadata
+                # 'source_id' não é um parâmetro direto do construtor DocumentChunk do R2R,
+                # mas o conceito é coberto por 'document_id' que é o ID do documento pai.
             )
         )
 
