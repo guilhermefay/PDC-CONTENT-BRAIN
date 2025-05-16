@@ -11,6 +11,7 @@ from crewai.crews.crew_output import CrewOutput
 # Configurar logging para ESTE módulo especificamente
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
 logger = logging.getLogger(__name__)
+logger.info("--- ANNOTATOR_AGENT.PY - SCRIPT VERSION: 2024-05-16 11:30 AM ---") # Adicionando log de versão
 
 # --- INÍCIO: Copiar função _sanitize_metadata --- 
 def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,10 +175,18 @@ class AnnotatorAgent(BaseAgent):
             "chunk_index": chunk_index,
             "duration_sec": duration_sec
         }
-        expected_temp_id = 0
+        # Usar o ID do Supabase (inteiro) como temp_id esperado
+        # Certifique-se que 'id' existe e é um inteiro; adicione fallback se necessário ou logue erro.
+        supabase_chunk_id = original_chunk_dict.get("id")
+        if not isinstance(supabase_chunk_id, int):
+            logger.error(f"[Agent Run - {doc_id_log}] ID do Supabase ('id') ausente ou não é inteiro no original_chunk_dict: {supabase_chunk_id}. Usando 0 como fallback para temp_id.")
+            expected_temp_id = 0
+        else:
+            expected_temp_id = supabase_chunk_id
+
         chunk_content = original_chunk_dict["content"]
         task_input_dict = {
-            "temp_id": expected_temp_id,
+            "temp_id": expected_temp_id, # Usar o ID do Supabase
             "content": chunk_content[:MAX_CHARS],
             "meta": chunk_meta_final_for_task
         }
@@ -212,7 +221,7 @@ class AnnotatorAgent(BaseAgent):
                 
                 # Validar temp_id
                 if annotation_result.temp_id != expected_temp_id:
-                    logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Retornando None.")
+                    logger.error(f"[Agent Run - {doc_id_log}] Discrepância de temp_id! Esperado: {expected_temp_id}, Recebido: {annotation_result.temp_id}. Resultado bruto: {crew_output_result.raw}. Retornando None.")
                     return None # << RETORNAR None em caso de ID incorreto
                 
                 # Validar tags
@@ -227,6 +236,11 @@ class AnnotatorAgent(BaseAgent):
 
             else:
                 logger.error(f"[Agent Run - {doc_id_log}] Não foi possível extrair ChunkOut do resultado do CrewAI. Resultado: {crew_output_result}")
+                if crew_output_result and hasattr(crew_output_result, 'raw') and crew_output_result.raw:
+                    logger.error(f"[Agent Run - {doc_id_log}] Conteúdo bruto (raw) do CrewOutput: {crew_output_result.raw}")
+                elif crew_output_result:
+                    logger.error(f"[Agent Run - {doc_id_log}] CrewOutput não tem 'raw' ou está vazio, __dict__: {crew_output_result.__dict__ if hasattr(crew_output_result, '__dict__') else 'N/A'}")
+
                 if crew_output_result and hasattr(crew_output_result, '__dict__'):
                     logger.debug(f"[Agent Run - {doc_id_log}] Atributos do CrewOutput: {crew_output_result.__dict__}")
                 return None # << RETORNAR None se extração falhar
