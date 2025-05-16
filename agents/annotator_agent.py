@@ -11,7 +11,7 @@ from crewai.crews.crew_output import CrewOutput
 # Configurar logging para ESTE módulo especificamente
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s')
 logger = logging.getLogger(__name__)
-logger.info("--- ANNOTATOR_AGENT.PY --- CACHE_BUST_V5_ANNOTATOR --- LOADING ---")
+logger.info("--- ANNOTATOR_AGENT.PY --- CACHE_BUST_V6_ANNOTATOR --- LOADING ---")
 
 # --- INÍCIO: Copiar função _sanitize_metadata --- 
 def _sanitize_metadata(meta: Dict[str, Any]) -> Dict[str, Any]:
