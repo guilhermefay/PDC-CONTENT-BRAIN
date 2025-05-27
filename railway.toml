@@ -1,0 +1,12 @@
+# railway.toml - Configuração de implantação para o worker ETL
+[deploy]
+# Reiniciar apenas em caso de falha, não automaticamente
+restartPolicyType = "ON_FAILURE"
+# Limitar o número de tentativas de reinício para evitar loops infinitos
+restartPolicyMaxRetries = 3 
+
+# Aumentar recursos para evitar erros "No space left on device"
+[service]
+# Solicitar mais memória e disco para o serviço
+memory = "2048"  # 2GB RAM
+disk = "10240"   # 10GB disco para suportar o download de vídeos grandes 
